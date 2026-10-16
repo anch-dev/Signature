@@ -99,6 +99,21 @@ jobs:
           name: Signature-ipa
           path: Signature.ipa
 
+      # Rolling "latest" release with the raw .ipa: one stable link to download
+      # straight from Safari / SideStore (no artifact zip to unpack).
+      - name: Publish latest build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: .
+        run: |
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create latest Signature.ipa \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Latest build ($(date -u +%Y-%m-%d) · ${GITHUB_SHA::7})" \
+            --notes "Built automatically from main at ${GITHUB_SHA::7}. Download Signature.ipa and open it with SideStore or AltStore."
+
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
