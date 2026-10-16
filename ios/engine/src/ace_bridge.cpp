@@ -24,7 +24,11 @@
 #include <vector>
 
 #if defined(__APPLE__)
+#    include <TargetConditionals.h>
 #    include <mach/mach.h>
+#    if TARGET_OS_IPHONE
+#        include <os/proc.h>
+#    endif
 #elif defined(__linux__)
 #    include <unistd.h>
 #endif
@@ -171,6 +175,22 @@ bool relevant(const std::string & user, const std::string & enhanced) {
     return false;
 }
 
+// True when lyrics contain sung words, not only [Section] tags.
+bool has_words(const std::string & lyrics) {
+    bool in_tag = false;
+    int  letters = 0;
+    for (char ch : lyrics) {
+        if (ch == '[') {
+            in_tag = true;
+        } else if (ch == ']') {
+            in_tag = false;
+        } else if (!in_tag && isalpha((unsigned char) ch)) {
+            letters++;
+        }
+    }
+    return letters >= 12;
+}
+
 std::string merge_caption(const std::string & user, const std::string & enhanced) {
     std::string u = user, en = enhanced;
     while (!en.empty() && isspace((unsigned char) en.back())) {
@@ -189,6 +209,30 @@ std::string merge_caption(const std::string & user, const std::string & enhanced
     return (m + ". " + en).substr(0, 900);
 }
 
+// Bytes the OS will still let this process allocate (iOS); 0 = unknown.
+uint64_t available_memory() {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    return (uint64_t) os_proc_available_memory();
+#else
+    return 0;
+#endif
+}
+
+uint64_t file_size(const char * path) {
+    FILE * f = path ? fopen(path, "rb") : nullptr;
+    if (!f) {
+        return 0;
+    }
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fclose(f);
+    return n > 0 ? (uint64_t) n : 0;
+}
+
+// Refuse to load a model that clearly can't fit, instead of being killed by iOS.
+// Mapped weights are file-backed (reclaimable), so only part of the file counts.
+bool fits(const char * path, bool mapped, char * err, int err_len, const char * what);
+
 void set_err(char * err, int len, const char * msg) {
     if (err && len > 0) {
         snprintf(err, (size_t) len, "%s", msg);
@@ -201,11 +245,38 @@ void copy_str(char * dst, size_t cap, const std::string & s) {
     snprintf(dst, cap, "%s", s.c_str());
 }
 
+bool fits(const char * path, bool mapped, char * err, int err_len, const char * what) {
+    uint64_t avail = available_memory();
+    if (avail == 0) {
+        return true;
+    }
+    uint64_t size = file_size(path);
+    uint64_t need = (uint64_t) ((double) size * (mapped ? 0.35 : 1.05)) + 350ull * 1048576ull;
+    if (need <= avail) {
+        return true;
+    }
+    if (err && err_len > 0) {
+        snprintf(err, (size_t) err_len,
+                 "Not enough memory for the %s (needs about %.1f GB, %.1f GB free). Pick a smaller size "
+                 "(Compact), turn on Lite in Settings, or close other apps.",
+                 what, (double) need / 1073741824.0, (double) avail / 1073741824.0);
+    }
+    fprintf(stderr, "[Signature] memory guard: %s needs ~%.0f MB, %.0f MB available\n", what,
+            (double) need / 1048576.0, (double) avail / 1048576.0);
+    return false;
+}
+
 }  // namespace
 
 extern "C" {
 
 ace_engine * ace_engine_create(void) {
+#if defined(__APPLE__)
+    // Metal residency sets pin every buffer (including memory-mapped model
+    // files) and keep them alive for minutes after release. On a phone that
+    // defeats both mapping and one-model-at-a-time unloading, so turn them off.
+    setenv("GGML_METAL_NO_RESIDENCY", "1", 1);
+#endif
     ace_engine * e = new ace_engine();
     e->store       = store_create(EVICT_STRICT);
     if (!e->store) {
@@ -213,6 +284,7 @@ ace_engine * ace_engine_create(void) {
         return nullptr;
     }
     g_wctx_zero_copy = e->opts.zero_copy != 0;
+    g_wctx_no_fuse   = g_wctx_zero_copy;
     return e;
 }
 
@@ -231,6 +303,7 @@ void ace_engine_set_options(ace_engine * e, const ace_engine_options * o) {
     std::lock_guard<std::mutex> lock(e->busy);
     e->opts          = *o;
     g_wctx_zero_copy = o->zero_copy != 0;
+    g_wctx_no_fuse   = g_wctx_zero_copy;  // fused weights can't be mapped from the file
     // Takes effect the next time a model loads (strict eviction reloads per stage).
     if (o->use_cpu) {
         backend_set_device("CPU");
@@ -355,6 +428,9 @@ int ace_engine_generate(ace_engine *             e,
             lp.use_batch_cfg = false;  // run cond/uncond one after another: half the activations
         }
 
+        if (!fits(m->lm_path, e->opts.zero_copy != 0, err, err_len, "songwriter")) {
+            return -1;
+        }
         AceLm * lmctx = ace_lm_load(e->store, &lp);
         if (!lmctx) {
             set_err(err, err_len, "could not load the songwriter model");
@@ -386,9 +462,15 @@ int ace_engine_generate(ace_engine *             e,
                             req.caption.c_str(), fo[0].caption.c_str(),
                             merged == req.caption ? "kept user prompt only (no relevant additions)" : "merged");
                 }
-                req.caption = merged;
-                if (req.lyrics.empty() && !fo[0].lyrics.empty()) {
+                const bool on_topic = relevant(req.caption, fo[0].caption);
+                req.caption         = merged;
+                // Only reuse the format pass's lyrics when it stayed on topic and
+                // actually wrote words (not just [Section] tags).
+                if (req.lyrics.empty() && on_topic && has_words(fo[0].lyrics)) {
                     req.lyrics = fo[0].lyrics;
+                } else if (vb.on && req.lyrics.empty()) {
+                    fprintf(stderr, "[Signature] enhance: discarded its lyrics (%s)\n",
+                            on_topic ? "no words" : "off topic");
                 }
             } else if (vb.on) {
                 fprintf(stderr, "[Signature] enhance: format pass failed, using prompt as typed\n");
@@ -444,6 +526,9 @@ int ace_engine_generate(ace_engine *             e,
         sp.vae_chunk = duration > 40.0f ? 256 : 512;
     }
 
+    if (!fits(m->dit_path, e->opts.zero_copy != 0, err, err_len, "music model")) {
+        return -1;
+    }
     AceSynth * synth = ace_synth_load(e->store, &sp);
     if (!synth) {
         set_err(err, err_len, sp.adapter_path ? "could not load the music model or your style"

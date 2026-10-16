@@ -72,6 +72,11 @@ struct CreateView: View {
             .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "safetensors") ?? .data, .data]) { r in
                 if case .success(let url) = r, let added = adapters.importFile(url) { gen.adapter = added }
             }
+            .alert("Last song didn't finish", isPresented: Binding(get: { gen.crashNotice != nil },
+                                                                  set: { if !$0 { gen.crashNotice = nil } })) {
+                Button("Open Models") { gen.crashNotice = nil; showModels = true }
+                Button("OK", role: .cancel) {}
+            } message: { Text(gen.crashNotice ?? "") }
             .alert("Style", isPresented: Binding(get: { adapters.importMessage != nil },
                                                  set: { if !$0 { adapters.importMessage = nil } })) {
                 Button("OK", role: .cancel) {}

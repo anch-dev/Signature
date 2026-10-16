@@ -76,6 +76,22 @@ final class Generator: ObservableObject {
     @Published var error: String?
     @Published var lastSong: Song?
 
+    /// Set at launch if the previous song never finished (iOS killed the app, usually for memory).
+    @Published var crashNotice: String?
+    private static let inFlightKey = "inFlightGeneration"
+
+    init() {
+        if let last = UserDefaults.standard.string(forKey: Self.inFlightKey) {
+            crashNotice = "Signature closed while making a song (\(last)). That usually means it ran out of memory. Try the Compact size of this model, turn on Lite in Settings, or make a shorter song. The log in Files → Signature → Logs has the details."
+            LogCapture.shared.log("Previous run ended unexpectedly during: \(last)")
+            UserDefaults.standard.removeObject(forKey: Self.inFlightKey)
+        }
+    }
+
+    private func markInFlight(_ text: String?) {
+        if let text { UserDefaults.standard.set(text, forKey: Self.inFlightKey) } else { UserDefaults.standard.removeObject(forKey: Self.inFlightKey) }
+    }
+
     private let cancelFlag = LockedFlag()
     private var remoteTask: Task<Void, Never>?
 
@@ -195,6 +211,7 @@ final class Generator: ObservableObject {
     }
 
     private func end() {
+        markInFlight(nil)
         running = false
         startedAt = nil
         UIApplication.shared.isIdleTimerDisabled = false
@@ -229,6 +246,8 @@ final class Generator: ObservableObject {
         begin(usesWriter ? GenStage.songwriter.label : GenStage.diffusion.label)
         stage = usesWriter ? .songwriter : .diffusion
         etaGuess = historyRate(etaKey).map { $0 * request.duration }
+        let inFlightBase = "\(modelName) \(models.musicQuant.label), \(Int(request.duration))s"
+        markInFlight("\(inFlightBase), \(stage.label.lowercased())")
         LogCapture.shared.debug("Request: caption=\"\(request.caption)\" lyrics=\(request.lyrics.isEmpty ? "(songwriter writes)" : "\(request.lyrics.count) chars") language=\(request.language.isEmpty ? "auto" : request.language) seed=\(request.seed) style=\(styleName ?? "base") scale=\(request.adapterScale) task=\(request.task)")
         LogCapture.shared.debug("Device: memory budget \(String(format: "%.2f", Device.budgetGB)) GB, max length \(Int(models.maxDuration))s, ETA guess \(etaGuess.map { "\(Int($0))s" } ?? "none")")
         updateETA()
@@ -246,7 +265,10 @@ final class Generator: ObservableObject {
                             guard let self else { return }
                             self.stage = s
                             self.statusText = s.label
-                            if s != self.stage { LogCapture.shared.debug("Stage: \(s.label) at \(Int(value * 100))%") }
+                            if s != self.stage {
+                                LogCapture.shared.debug("Stage: \(s.label) at \(Int(value * 100))%")
+                                self.markInFlight("\(inFlightBase), \(s.label.lowercased())")
+                            }
                             self.progress = max(self.progress, value)
                             self.updateETA()
                         }
