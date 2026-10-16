@@ -8,6 +8,8 @@ struct SignatureApp: App {
     @StateObject private var adapters = AdapterStore()
     @StateObject private var generator = Generator()
     @StateObject private var player = Player()
+    @StateObject private var hub = HubStore()
+    @Environment(\.scenePhase) private var phase
     @State private var tab = 0
 
     init() {
@@ -23,22 +25,35 @@ struct SignatureApp: App {
                 LibraryView()
                     .tabItem { Label("Library", systemImage: "music.note.list") }
                     .tag(1)
+                PCView()
+                    .tabItem { Label("PC", systemImage: "desktopcomputer") }
+                    .tag(2)
                 SetupView()
                     .tabItem { Label("Models", systemImage: "square.and.arrow.down") }
-                    .tag(2)
+                    .tag(3)
             }
             .environmentObject(models)
             .environmentObject(library)
             .environmentObject(adapters)
             .environmentObject(generator)
             .environmentObject(player)
-            .onAppear { if !models.isReady { tab = 2 } }
+            .environmentObject(hub)
+            .onAppear {
+                if !models.isReady && !hub.isPaired { tab = 3 }
+            }
             .onOpenURL { url in
-                // A .safetensors shared via AirDrop / Files "Open in Signature".
-                if let added = adapters.importFile(url) {
+                if url.scheme == "signature" {
+                    // Pairing QR from the Hub dashboard, scanned with the Camera app.
+                    if hub.handlePairLink(url) { tab = 2 }
+                } else if let added = adapters.importFile(url) {
+                    // A .safetensors shared via AirDrop / Files "Open in Signature".
                     generator.adapter = added
+                    generator.target = .phone
                     tab = 0
                 }
+            }
+            .onChange(of: phase) { p in
+                if p == .active { hub.startPolling() } else if p == .background { hub.stopPolling() }
             }
         }
     }

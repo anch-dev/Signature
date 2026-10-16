@@ -59,6 +59,11 @@ jobs:
       - name: Package IPA
         run: |
           APP=build/dd/Build/Products/Release-iphoneos/Signature.app
+          # Fail loudly if the on-device engine didn't make it into the binary.
+          ls -lh "$APP/Signature"
+          strings "$APP/Signature" | grep -q "Synth-Load" || { echo "::error::acestep engine missing from app binary"; exit 1; }
+          strings "$APP/Signature" | grep -q "kernel_mul_mm" || { echo "::error::Metal kernels missing from app binary"; exit 1; }
+          echo "Engine and Metal kernels present"
           # Fake-sign so the increased-memory-limit entitlement travels with the
           # binary; SideStore/AltStore re-sign it with your Apple ID on install.
           ldid -SSignature/Signature.entitlements "$APP/Signature"

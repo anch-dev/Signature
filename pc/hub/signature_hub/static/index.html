@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signature Hub</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b36; --text: #e8eaf0; --muted: #8b93a7;
+    --accent: #f97316; --accent-2: #fb923c; --ok: #22c55e; --warn: #eab308; --bad: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 18px 24px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
+  header .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  header .sub { color: var(--muted); margin-left: auto; font-size: 12px; }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; padding: 16px 24px 40px; max-width: 1280px; margin: 0 auto; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  section h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; }
+  .wide { grid-column: 1 / -1; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button { background: #222734; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #3a4152; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+  button.active { outline: 2px solid var(--accent); }
+  button.danger { color: var(--bad); }
+  a { color: var(--accent-2); }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 4px 12px; }
+  .kv div:nth-child(odd) { color: var(--muted); }
+  .bar { height: 8px; background: #222734; border-radius: 99px; overflow: hidden; margin: 8px 0; }
+  .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
+  pre { background: #0b0d11; border: 1px solid var(--line); border-radius: 8px; padding: 10px; height: 280px; overflow: auto; margin: 0; font: 12px/1.45 ui-monospace, Consolas, monospace; color: #c7cbd6; white-space: pre-wrap; }
+  .qrs { display: flex; gap: 16px; flex-wrap: wrap; }
+  .qr { background: #fff; border-radius: 10px; padding: 8px; width: 200px; }
+  .qr img { width: 184px; height: 184px; display: block; }
+  .qr p { color: #111; margin: 6px 2px 0; font-size: 12px; word-break: break-all; }
+  .muted { color: var(--muted); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; border: 1px solid var(--line); }
+  table { width: 100%; border-collapse: collapse; }
+  td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; }
+  svg.chart { width: 100%; height: 80px; }
+  code { background: #0b0d11; padding: 1px 6px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>Signature Hub</h1>
+  <span class="sub" id="host"></span>
+</header>
+<main>
+  <section>
+    <h2>Engine</h2>
+    <div class="kv" id="engine"></div>
+    <div class="row" style="margin-top:12px">
+      <button data-mode="api">Phone server</button>
+      <button data-mode="studio">Studio GUI</button>
+      <button data-mode="idle">Off (free GPU)</button>
+    </div>
+    <p class="muted" style="margin:10px 0 0">One GPU job at a time. Training pauses the engine and brings it back afterwards.</p>
+    <p id="studio" style="display:none;margin:8px 0 0">
+      <a id="studioLink" target="_blank">Open ACE-Step Studio ↗</a>
+      <span class="muted">login <code>signature</code> / your pairing token</span>
+    </p>
+  </section>
+
+  <section>
+    <h2>GPU</h2>
+    <div class="kv" id="gpu"><div>Status</div><div class="muted">reading…</div></div>
+  </section>
+
+  <section class="wide">
+    <h2>Pair your iPhone</h2>
+    <p class="muted" style="margin-top:0">Scan with the iPhone Camera app. Use the LAN code at home, or the Tailscale one anywhere.</p>
+    <div class="qrs" id="qrs"></div>
+    <div class="row" style="margin-top:12px">
+      <button id="showToken">Show token</button>
+      <button class="danger" id="rotate">New token (unpairs phones)</button>
+      <span id="token" class="muted"></span>
+    </div>
+  </section>
+
+  <section class="wide" id="trainBox">
+    <h2>Training</h2>
+    <div id="train" class="muted">No training yet. Start one from the Signature app's PC tab.</div>
+  </section>
+
+  <section>
+    <h2>Styles</h2>
+    <table id="styles"><tr><td class="muted">None yet</td></tr></table>
+  </section>
+
+  <section>
+    <h2>Logs</h2>
+    <div class="row" style="margin-bottom:8px">
+      <button data-log="engine" class="active">Engine</button>
+      <button data-log="training">Training</button>
+    </div>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script>
+const TOKEN = "__TOKEN__";
+const H = { "Authorization": "Bearer " + TOKEN, "Content-Type": "application/json" };
+let logSource = "engine";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtTime = (s) => { s = Math.max(0, s|0); const h = s/3600|0, m = (s%3600)/60|0; return (h ? h + "h " : "") + m + "m " + (s%60) + "s"; };
+const modeName = { api: "Phone server", studio: "Studio GUI", idle: "Off", training: "Training" };
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: H, ...opts });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+
+async function refresh() {
+  try {
+    const s = await api("/api/status");
+    $("host").textContent = s.name + " · v" + s.version;
+    const e = s.engine;
+    $("dot").style.background = e.state === "ready" ? "var(--ok)" : e.state === "starting" ? "var(--warn)" : e.state === "error" ? "var(--bad)" : "var(--muted)";
+    $("engine").innerHTML = `
+      <div>Mode</div><div>${modeName[e.mode] || e.mode}</div>
+      <div>State</div><div>${esc(e.state)}${e.state === "starting" ? " (first start downloads models, can take a while)" : ""}</div>
+      ${e.uptime ? `<div>Uptime</div><div>${fmtTime(e.uptime)}</div>` : ""}
+      ${s.loaded_style ? `<div>Style loaded</div><div>${esc(s.loaded_style)}</div>` : ""}
+      <div>Songs queued</div><div>${s.queue}</div>
+      ${!s.installed.acestep ? `<div>Install</div><div style="color:var(--bad)">ACE-Step missing, run install.bat</div>` : ""}
+      ${e.error ? `<div>Error</div><div style="color:var(--bad);white-space:pre-wrap">${esc(e.error)}</div>` : ""}`;
+    document.querySelectorAll("[data-mode]").forEach(b => b.classList.toggle("active", b.dataset.mode === e.mode));
+    $("studio").style.display = e.mode === "studio" && e.state === "ready" ? "" : "none";
+    $("studioLink").href = `http://localhost:${s.studio_port}`;
+    const g = s.gpu;
+    $("gpu").innerHTML = g ? `
+      <div>Card</div><div>${esc(g.name)}</div>
+      <div>VRAM</div><div>${(g.mem_used_mb/1024).toFixed(1)} / ${(g.mem_total_mb/1024).toFixed(1)} GB</div>
+      <div>Load</div><div>${g.util}% · ${g.temp_c}°C</div>` : `<div>Status</div><div class="muted">nvidia-smi not found</div>`;
+    renderTrain(s.training);
+  } catch (err) {
+    $("dot").style.background = "var(--bad)";
+  }
+}
+
+function renderTrain(t) {
+  if (!t) return;
+  const pct = t.step_name === "Train" && t.epochs_total ? Math.round(100 * t.epoch / t.epochs_total) : (t.percent ?? 0);
+  const overall = t.steps.length ? ((t.step + (pct / 100)) / t.steps.length) * 100 : 0;
+  const color = { running: "var(--warn)", done: "var(--ok)", failed: "var(--bad)", cancelled: "var(--muted)" }[t.status];
+  let chart = "";
+  if (t.losses && t.losses.length > 2) {
+    const L = t.losses, mx = Math.max(...L), mn = Math.min(...L), r = (mx - mn) || 1;
+    const pts = L.map((v, i) => `${(i / (L.length - 1)) * 100},${78 - ((v - mn) / r) * 74}`).join(" ");
+    chart = `<svg class="chart" viewBox="0 0 100 80" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="var(--accent)" stroke-width="1.2" vector-effect="non-scaling-stroke"/></svg>`;
+  }
+  $("train").innerHTML = `
+    <div class="row"><b>${esc(t.dataset)}</b><span class="pill" style="color:${color}">${esc(t.status)}</span>
+      <span class="muted">${t.kind === "label" ? "lyrics only" : `${t.epochs} epochs · rank ${t.rank}`} · ${fmtTime(t.elapsed)}</span>
+      ${t.status === "running" ? `<button class="danger" id="cancelTrain" style="margin-left:auto">Cancel</button>` : ""}</div>
+    <div class="bar"><i style="width:${overall.toFixed(1)}%"></i></div>
+    <div class="kv">
+      <div>Step</div><div>${t.step + 1}/${t.steps.length} · ${esc(t.step_name)} — ${esc(t.message)}</div>
+      ${t.step_name === "Train" ? `<div>Epoch</div><div>${t.epoch} / ${t.epochs_total || t.epochs}</div>` : ""}
+      ${t.loss != null ? `<div>Loss</div><div>${t.loss.toFixed(4)}</div>` : ""}
+    </div>${chart}`;
+  const c = $("cancelTrain");
+  if (c) c.onclick = () => confirm("Stop training?") && api("/api/train/cancel", { method: "POST" });
+}
+
+async function refreshSlow() {
+  try {
+    const list = await api("/api/styles");
+    $("styles").innerHTML = list.length ? `<tr><th>Style</th><th>Songs</th><th>Epochs</th><th></th></tr>` + list.map(a =>
+      `<tr><td>${esc(a.name)}</td><td>${a.songs ?? ""}</td><td>${a.epochs ?? ""}</td>
+       <td><a href="/api/styles/${encodeURIComponent(a.name)}/file?token=${encodeURIComponent(TOKEN)}">.safetensors</a></td></tr>`).join("")
+      : `<tr><td class="muted">None yet</td></tr>`;
+    const l = await api(`/api/logs?source=${logSource}&tail=400`);
+    const pre = $("log"), atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20;
+    pre.textContent = l.lines.join("\n");
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+  } catch (e) {}
+}
+
+async function loadPairing() {
+  const p = await (await fetch("/pair/info")).json();
+  $("qrs").innerHTML = p.addresses.length ? p.addresses.map(a =>
+    `<div class="qr"><img src="/pair/qr.svg?host=${encodeURIComponent(a.ip)}" alt="QR">
+     <p><b>${a.kind === "tailscale" ? "Tailscale" : "Wi-Fi"}</b> · ${esc(a.ip)}:${p.port}</p></div>`).join("")
+    : `<p class="muted">No network address found. Connect this PC to Wi-Fi/Ethernet or Tailscale.</p>`;
+}
+
+document.querySelectorAll("[data-mode]").forEach(b => b.onclick = async () => {
+  try { await api("/api/mode", { method: "POST", body: JSON.stringify({ mode: b.dataset.mode, make_default: true }) }); refresh(); }
+  catch (e) { alert(e.message); }
+});
+document.querySelectorAll("[data-log]").forEach(b => b.onclick = () => {
+  logSource = b.dataset.log;
+  document.querySelectorAll("[data-log]").forEach(x => x.classList.toggle("active", x === b));
+  refreshSlow();
+});
+$("showToken").onclick = () => $("token").textContent = TOKEN;
+$("rotate").onclick = async () => {
+  if (!confirm("Phones paired with the old token will need to scan again. Continue?")) return;
+  await fetch("/pair/rotate", { method: "POST" });
+  location.reload();
+};
+
+loadPairing();
+refresh(); refreshSlow();
+setInterval(refresh, 3000);
+setInterval(refreshSlow, 5000);
+</script>
+</body>
+</html>

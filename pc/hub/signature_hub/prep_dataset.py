@@ -2,26 +2,20 @@
 # requires-python = ">=3.10"
 # ///
 """
-prep_dataset.py - turn a folder of your songs into a Side-Step training set.
+prep_dataset.py - write lyric/caption sidecars for a Signature training set.
 
-Layout it expects (subfolders can be nested inside each):
+Run by the Signature Hub (training step 1) inside Side-Step's environment,
+which already has torch + CUDA + demucs; openai-whisper is added on the fly:
 
-    my_songs/
-      vocals/          songs with singing  -> lyrics auto-transcribed with Whisper
-      instrumentals/   beats / no vocals   -> lyrics = [Instrumental]
-      style.txt        optional: default caption for every song, e.g.
-                       "dark trap, 808s, airy pads, male vocal"
-      vocals/style.txt optional: overrides the root style.txt for that folder
+    uv run --with openai-whisper python prep_dataset.py <dataset folder>
 
-For every audio file it writes a sidecar <song>.txt next to it in the
-"key: value" format Side-Step reads (caption, is_instrumental, lyrics).
-Existing sidecars are left alone unless you pass --overwrite, so you can
-hand-edit lyrics and re-run safely.
+Layout:
+    <dataset>/vocals/         songs with singing -> Whisper transcription
+    <dataset>/instrumentals/  beats              -> [Instrumental]
+    <dataset>/style.txt       default caption
 
-Run it inside Side-Step's environment (it already has torch + CUDA + demucs):
-
-    cd Side-Step
-    uv run --with openai-whisper python ..\\trainer\\prep_dataset.py D:\\my_songs
+Each audio file gets <song>.txt in Side-Step's "key: value" format. Existing
+sidecars are kept (so edits made in the app survive) unless --overwrite.
 """
 
 from __future__ import annotations

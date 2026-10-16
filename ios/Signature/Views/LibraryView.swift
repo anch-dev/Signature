@@ -70,6 +70,7 @@ struct LibraryView: View {
         if s.bpm > 0 { parts.append("\(s.bpm) BPM") }
         if !s.key.isEmpty { parts.append(s.key) }
         if let a = s.adapter { parts.append(a) }
+        if let m = s.madeOn, m != "iPhone" { parts.append("made on \(m)") }
         return parts.joined(separator: " · ")
     }
 }

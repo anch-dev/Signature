@@ -44,6 +44,13 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: false
         UIBackgroundModes: [audio]
+        CFBundleURLTypes:
+          - CFBundleURLName: com.anchdev.signature.pair
+            CFBundleURLSchemes: [signature]
+        # The Hub is plain HTTP on your LAN / Tailscale (MagicDNS names aren't "local").
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSLocalNetworkUsageDescription: Signature connects to the Signature Hub on your PC to train styles and generate songs.
         UTImportedTypeDeclarations:
           - UTTypeIdentifier: com.anchdev.signature.safetensors
             UTTypeDescription: Style adapter

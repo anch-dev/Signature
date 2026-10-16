@@ -12,6 +12,7 @@ struct Song: Identifiable, Codable, Hashable {
     var duration: Double
     var created: Date
     var fileName: String
+    var madeOn: String?   // "iPhone" or the PC's name
 }
 
 /// Generated songs live in Documents/Songs (visible in the Files app) with a JSON index.
@@ -32,14 +33,14 @@ final class Library: ObservableObject {
 
     func url(for song: Song) -> URL { songsDir.appendingPathComponent(song.fileName) }
 
-    func newFileURL(title: String) -> (URL, String) {
+    func newFileURL(title: String, ext: String = "wav") -> (URL, String) {
         let safe = title.components(separatedBy: CharacterSet.alphanumerics.union(.whitespaces).inverted)
             .joined().trimmingCharacters(in: .whitespaces)
         let base = (safe.isEmpty ? "Song" : String(safe.prefix(40)))
-        var name = "\(base).wav"
+        var name = "\(base).\(ext)"
         var n = 2
         while FileManager.default.fileExists(atPath: songsDir.appendingPathComponent(name).path) {
-            name = "\(base) \(n).wav"
+            name = "\(base) \(n).\(ext)"
             n += 1
         }
         return (songsDir.appendingPathComponent(name), name)

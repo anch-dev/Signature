@@ -8,9 +8,10 @@ ios/Signature/Signature.entitlements
 Payload/
 *.ipa
 
-# Trainer outputs
-work/
-Side-Step/
+# PC Hub runtime (installed engines, models, your songs and styles)
+pc/runtime/
+pc/data/
+pc/hub/.venv/
 *.safetensors
 
 # OS / editor

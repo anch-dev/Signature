@@ -1,0 +1,23 @@
+[project]
+name = "signature-hub"
+version = "1.0.0"
+description = "Signature Hub: runs ACE-Step Studio, phone generation and style training on your PC"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "httpx>=0.27",
+    "python-multipart>=0.0.9",
+    "psutil>=5.9",
+    "qrcode>=7.4",
+]
+
+[project.scripts]
+signature-hub = "signature_hub.main:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["signature_hub"]
