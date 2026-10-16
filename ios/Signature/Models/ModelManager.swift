@@ -183,6 +183,32 @@ final class ModelManager: ObservableObject {
         refresh()
     }
 
+    /// Every file actually in the models folder (for diagnostics), with size and whether it's complete.
+    struct DiskFile: Identifiable {
+        let name: String
+        let bytes: Int64
+        let complete: Bool
+        var id: String { name }
+    }
+
+    func filesOnDisk() -> [DiskFile] {
+        let fm = FileManager.default
+        let names = (try? fm.contentsOfDirectory(atPath: directory.path)) ?? []
+        return names.filter { $0.hasSuffix(".gguf") }.sorted().map { n in
+            let size = (try? fm.attributesOfItem(atPath: directory.appendingPathComponent(n).path)[.size] as? NSNumber)?.int64Value ?? 0
+            let expected = Catalog.allFiles.first { $0.id == n }?.bytes
+            return DiskFile(name: n, bytes: size, complete: expected == size)
+        }
+    }
+
+    /// Human-readable role for a required file.
+    func role(_ f: ModelFile) -> String {
+        if f == Catalog.vae { return "Audio decoder" }
+        if f == textEncoderFile { return "Text encoder" }
+        if f == songwriterFile { return songwriter.name }
+        return music.name
+    }
+
     var usedBytes: Int64 {
         Catalog.allFiles.filter { installed.contains($0.id) }.reduce(0) { $0 + $1.bytes }
     }

@@ -90,6 +90,7 @@ struct ModelsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 summary
+                ReadinessCard()
                 VStack(alignment: .leading, spacing: 10) {
                     SectionLabel("Music models")
                     ForEach(Catalog.music) { m in musicRow(m) }
@@ -117,6 +118,10 @@ struct ModelsView: View {
                     }
                     .card()
                 }
+                NavigationLink { FilesOnDiskView() } label: {
+                    Label("Files on this iPhone", systemImage: "folder").font(.subheadline)
+                }
+                .tint(Theme.accent)
                 Text("Models come from Hugging Face (Serveurperso/ACE-Step-1.5-GGUF). Downloads continue in the background. Long-press a size to delete it.")
                     .font(.caption2).foregroundStyle(Theme.faint)
             }
@@ -264,6 +269,9 @@ struct SettingsView: View {
                     NavigationLink { ModelsView() } label: {
                         LabeledContent("Models", value: models.music.name)
                     }
+                    if !models.isReady {
+                        ReadinessCard().listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                    }
                 } footer: {
                     Text("Every ACE-Step 1.5 model, in every size, with how well it fits this iPhone.")
                 }
@@ -302,6 +310,10 @@ struct SettingsView: View {
                         }
                     }
                     .disabled(gen.running || gen.testing || !models.isReady)
+                    if !models.isReady {
+                        Text("Needs every model file above first (\(models.missing.count) missing).")
+                            .font(.footnote).foregroundStyle(Theme.warn)
+                    }
                     if let r = gen.testResult {
                         Text(r).font(.footnote).foregroundStyle(.secondary)
                     }
@@ -342,5 +354,88 @@ struct SettingsView: View {
 
     private func peak(_ b: UInt64) -> String {
         b == 0 ? "—" : ByteCountFormatter.string(fromByteCount: Int64(b), countStyle: .memory)
+    }
+}
+
+/// What the current setup needs, with one button to get all of it.
+struct ReadinessCard: View {
+    @EnvironmentObject var models: ModelManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: models.isReady ? "checkmark.seal.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(models.isReady ? Theme.good : Theme.warn)
+                Text(models.isReady ? "Ready to create on this iPhone" : "Missing files for \(models.music.name)")
+                    .font(.headline).foregroundStyle(Theme.text)
+                Spacer()
+            }
+            ForEach(models.required) { f in
+                HStack {
+                    Image(systemName: models.isInstalled(f) ? "checkmark.circle.fill"
+                          : (models.progress[f.id] != nil ? "arrow.down.circle" : "circle"))
+                        .foregroundStyle(models.isInstalled(f) ? Theme.good : Theme.muted)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(models.role(f)).font(.subheadline).foregroundStyle(Theme.text)
+                        Text(f.id).font(.caption2).foregroundStyle(Theme.faint).lineLimit(1)
+                    }
+                    Spacer()
+                    if let p = models.progress[f.id] {
+                        ProgressView(value: p).tint(Theme.accent).frame(width: 70)
+                    } else if !models.isInstalled(f) {
+                        Text(ModelManager.format(f.bytes)).font(.caption).foregroundStyle(Theme.muted)
+                    }
+                }
+                if let e = models.errors[f.id] {
+                    Text(e).font(.caption2).foregroundStyle(Theme.bad)
+                }
+            }
+            if !models.isReady && !models.isDownloadingRequired {
+                Button { models.downloadMissing() } label: {
+                    Text("Download missing (\(ModelManager.format(models.missingBytes)))")
+                        .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
+                        .background(Capsule().fill(Color.white)).foregroundStyle(.black)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .card()
+    }
+}
+
+/// Raw view of the models folder, to confirm what's really on the phone.
+struct FilesOnDiskView: View {
+    @EnvironmentObject var models: ModelManager
+    @State private var files: [ModelManager.DiskFile] = []
+
+    var body: some View {
+        List {
+            Section {
+                if files.isEmpty {
+                    Text("No model files found. If you deleted and reinstalled Signature, iOS removed its downloads too.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(files) { f in
+                    HStack {
+                        Image(systemName: f.complete ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(f.complete ? Theme.good : Theme.warn)
+                        VStack(alignment: .leading) {
+                            Text(f.name).font(.caption.monospaced())
+                            Text(f.complete ? ModelManager.format(f.bytes) : "\(ModelManager.format(f.bytes)) (incomplete)")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } footer: {
+                Text(models.directory.path).font(.caption2.monospaced())
+            }
+        }
+        .screen()
+        .navigationTitle("Files on this iPhone")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            models.refresh()
+            files = models.filesOnDisk()
+        }
     }
 }
