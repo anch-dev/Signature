@@ -53,7 +53,14 @@ jobs:
             -destination 'generic/platform=iOS' \
             -derivedDataPath build/dd \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build | tee build/xcodebuild.log | grep -E "error:|warning: unable|BUILD (SUCCEEDED|FAILED)" || true
+            build > build/xcodebuild.log 2>&1 || true
+          # Surface compiler errors as annotations (readable from the API and the run page).
+          grep -E "^/.*: error: " build/xcodebuild.log | sort -u | head -60 | while IFS= read -r line; do
+            f=$(echo "$line" | cut -d: -f1 | sed "s#^$PWD/##"); l=$(echo "$line" | cut -d: -f2)
+            msg=$(echo "$line" | cut -d: -f5- | sed 's/^ *//')
+            echo "::error file=ios/$f,line=$l::$msg"
+          done
+          grep -E "BUILD (SUCCEEDED|FAILED)" build/xcodebuild.log || tail -30 build/xcodebuild.log
           test -d build/dd/Build/Products/Release-iphoneos/Signature.app
 
       - name: Package IPA
