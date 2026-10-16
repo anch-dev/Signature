@@ -27,6 +27,7 @@ class GenJob:
     adapter_scale: float = 1.0
     seed: int = -1
     bpm: int = 0
+    simple: bool = False            # description only: ACE-Step's songwriter writes lyrics + style
     status: str = "queued"          # queued | starting | running | done | failed
     message: str = ""
     created: float = field(default_factory=time.time)
@@ -135,13 +136,16 @@ class Generator:
 
             body = {
                 "prompt": job.caption,
-                "lyrics": job.lyrics or "[Instrumental]",
+                "lyrics": job.lyrics if job.simple else (job.lyrics or "[Instrumental]"),
                 "audio_duration": job.duration,
                 "thinking": True,            # songwriter LM plans structure -> better vocals
                 "batch_size": 1,
                 "audio_format": "mp3",
                 "inference_steps": 8,
             }
+            if job.simple:
+                body["sample_mode"] = True
+                body["sample_query"] = job.caption
             if job.language:
                 body["vocal_language"] = job.language
             if job.bpm > 0:
@@ -193,6 +197,7 @@ class Generator:
                 "duration": float(metas.get("duration") or job.duration),
                 "seed": _int(seed, -1),
                 "model": item.get("dit_model") or config.DIT_MODEL,
+                "lyrics": item.get("lyrics") or job.lyrics,
             }
             job.file = str(out)
             job.status = "done"

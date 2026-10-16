@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct CreateView: View {
     @EnvironmentObject var models: ModelManager
@@ -7,213 +8,338 @@ struct CreateView: View {
     @EnvironmentObject var gen: Generator
     @EnvironmentObject var player: Player
     @EnvironmentObject var hub: HubStore
+    @State private var showModels = false
+    @State private var showOptions = false
+    @State private var importing = false
+    @FocusState private var focused: Bool
 
+    static let genres = ["pop", "hip hop", "trap", "r&b", "rock", "indie", "edm", "house", "lo-fi", "drill",
+                         "jazz", "soul", "funk", "country", "latin", "k-pop", "metal", "acoustic", "cinematic", "ambient"]
+    static let vibes = ["male vocal", "female vocal", "upbeat", "melancholic", "dreamy", "dark", "chill", "energetic",
+                        "808s", "piano", "guitar", "synths", "strings"]
     private let languages: [(String, String)] = [
         ("", "Auto"), ("en", "English"), ("es", "Spanish"), ("it", "Italian"), ("fr", "French"),
         ("pt", "Portuguese"), ("de", "German"), ("ja", "Japanese"), ("ko", "Korean"), ("zh", "Chinese"),
     ]
 
     private var onPC: Bool { gen.target == .pc }
-    private var trigger: String? {
-        onPC ? gen.pcStyle : gen.adapter.map(AdapterStore.name)
-    }
+    private var ready: Bool { onPC ? hub.canGenerate : models.isReady }
+    private var limit: Double { onPC ? 480 : models.maxDuration }
 
     var body: some View {
         NavigationStack {
-            Form {
-                if hub.isPaired {
-                    Section {
-                        Picker("Make on", selection: $gen.target) {
-                            Text("This iPhone").tag(GenTarget.phone)
-                            Text(hub.pairing?.name ?? "PC").tag(GenTarget.pc)
-                        }
-                        .pickerStyle(.segmented)
-                        .disabled(gen.running)
-                        if onPC { pcStatusLine }
-                    } footer: {
-                        Text(onPC ? "Your PC does the work; the song lands in your Library when it's done."
-                                  : "Runs fully offline on this iPhone.")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    header
+                    PillPicker(options: CreateMode.allCases, selection: $gen.mode) { $0.title }
+                    if !onPC && !models.isReady { downloadCard }
+                    if onPC { pcStatus }
+                    if gen.mode == .simple { simpleForm } else { customForm }
+                    soundRow
+                    optionsCard
+                    if let e = gen.error {
+                        Label(e, systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout).foregroundStyle(Theme.bad)
                     }
+                    recent
                 }
-
-                if !onPC && !models.isReady {
-                    Section {
-                        Label("Download the models in the Models tab first.", systemImage: "arrow.down.circle")
-                    }
-                }
-
-                styleSection
-
-                Section("Style prompt") {
-                    TextField("e.g. melodic trap, 808s, airy pads, male vocal", text: $gen.style, axis: .vertical)
-                        .lineLimit(2...5)
-                }
-
-                lyricsSection
-
-                Section {
-                    VStack(alignment: .leading) {
-                        Text("Length \(Self.time(min(gen.duration, gen.durationLimit)))")
-                        Slider(value: $gen.duration, in: 10...gen.durationLimit, step: 5)
-                    }
-                    DisclosureGroup("Advanced") {
-                        if !onPC {
-                            Toggle("Songwriter planning", isOn: $gen.useSongwriter)
-                        }
-                        Toggle("Reuse seed", isOn: $gen.lockSeed)
-                        if gen.lockSeed {
-                            TextField("Seed", text: $gen.seedText).keyboardType(.numberPad)
-                        }
-                        if !onPC {
-                            LabeledContent("Memory available", value: gen.availableMemoryText)
-                        }
-                    }
-                } footer: {
-                    if !onPC {
-                        Text("Songwriter planning gives much better vocals and structure. Turn it off only for quick instrumental sketches.")
-                    }
-                }
-
-                actionSection
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
-            .navigationTitle("Signature")
             .scrollDismissesKeyboard(.interactively)
-            .alert("Style", isPresented: Binding(
-                get: { adapters.importMessage != nil }, set: { if !$0 { adapters.importMessage = nil } })
-            ) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(adapters.importMessage ?? "")
+            .screen()
+            .safeAreaInset(edge: .bottom) {
+                CreateButton(title: onPC ? "Create on \(hub.pairing?.name ?? "PC")" : "Create",
+                             running: gen.running, progress: gen.progress, status: gen.statusText,
+                             enabled: ready, action: create, cancel: gen.cancel)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .background(Theme.bg.opacity(0.92))
             }
+            .toolbar(.hidden, for: .navigationBar)
+            .sheet(isPresented: $showModels) { ModelPickerSheet() }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "safetensors") ?? .data, .data]) { r in
+                if case .success(let url) = r, let added = adapters.importFile(url) { gen.adapter = added }
+            }
+            .alert("Style", isPresented: Binding(get: { adapters.importMessage != nil },
+                                                 set: { if !$0 { adapters.importMessage = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(adapters.importMessage ?? "") }
+            .onChange(of: models.maxDuration) { m in if !onPC { gen.duration = min(gen.duration, m) } }
         }
     }
 
-    // MARK: sections
+    private func create() {
+        focused = false
+        if onPC { gen.startRemote(hub: hub, library: library) } else { gen.start(models: models, library: library) }
+    }
 
-    @ViewBuilder private var pcStatusLine: some View {
+    // MARK: header + model chip
+
+    private var header: some View {
+        HStack(alignment: .center) {
+            Text("Create").font(.largeTitle.bold()).foregroundStyle(Theme.text)
+            Spacer()
+            Button { showModels = true } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: onPC ? "desktopcomputer" : "iphone")
+                    Text(onPC ? (hub.pairing?.name ?? "PC") : models.music.name).lineLimit(1)
+                    Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+                }
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Capsule().fill(Theme.card))
+                .overlay(Capsule().stroke(Theme.stroke))
+                .foregroundStyle(Theme.text)
+            }
+            .accessibilityLabel("Model and device")
+        }
+        .padding(.top, 8)
+    }
+
+    // MARK: download / status
+
+    private var downloadCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "arrow.down.circle.fill").font(.title2).foregroundStyle(Theme.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(models.isDownloadingRequired ? "Downloading \(models.music.name)" : "Get \(models.music.name) on this iPhone")
+                        .font(.headline).foregroundStyle(Theme.text)
+                    Text(models.isDownloadingRequired
+                         ? "Keeps going if you leave the app."
+                         : "\(ModelManager.format(models.missingBytes)) one-time download, then everything runs offline.")
+                        .font(.caption).foregroundStyle(Theme.muted)
+                }
+                Spacer()
+            }
+            if models.isDownloadingRequired {
+                ProgressView(value: models.requiredProgress).tint(Theme.accent)
+            } else {
+                Button { models.downloadMissing() } label: {
+                    Text("Download").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
+                        .background(Capsule().fill(Color.white)).foregroundStyle(.black)
+                }
+                .buttonStyle(.plain)
+            }
+            ForEach(models.missing.filter { models.errors[$0.id] != nil }) { f in
+                Text("\(f.id): \(models.errors[f.id] ?? "")").font(.caption2).foregroundStyle(Theme.bad)
+            }
+        }
+        .card()
+    }
+
+    @ViewBuilder private var pcStatus: some View {
         if let s = hub.status, hub.reachable {
             if s.training?.isRunning == true {
-                Label("PC is training \(s.training!.dataset). Generate on the iPhone meanwhile.", systemImage: "hourglass")
-                    .foregroundStyle(.orange)
-            } else if s.engine.mode == "studio" {
-                Label("Studio GUI is open on the PC (styles unavailable there)", systemImage: "desktopcomputer")
-                    .foregroundStyle(.secondary)
-            } else {
-                Label("\(s.gpu?.name ?? "PC") ready", systemImage: "checkmark.circle")
-                    .foregroundStyle(.green)
+                Label("\(hub.pairing?.name ?? "PC") is training \(s.training!.dataset). Create on the iPhone meanwhile.", systemImage: "hourglass")
+                    .font(.callout).foregroundStyle(Theme.warn)
             }
         } else {
             Label("Can't reach \(hub.pairing?.name ?? "the PC"). Same Wi-Fi or Tailscale on?", systemImage: "wifi.exclamationmark")
-                .foregroundStyle(.red)
+                .font(.callout).foregroundStyle(Theme.bad)
         }
     }
 
-    @ViewBuilder private var styleSection: some View {
-        Section {
-            if onPC {
-                Picker("Style", selection: $gen.pcStyle) {
-                    Text("None (base model)").tag(String?.none)
-                    ForEach(hub.styles.filter(\.pc_ready)) { s in
-                        Text(s.name).tag(Optional(s.name))
-                    }
-                }
-            } else {
-                Picker("Style", selection: $gen.adapter) {
-                    Text("None (base model)").tag(URL?.none)
-                    ForEach(adapters.adapters, id: \.self) { url in
-                        Text(AdapterStore.name(url)).tag(Optional(url))
-                    }
-                }
-            }
-            if let t = trigger {
-                VStack(alignment: .leading) {
-                    Text("Strength \(gen.adapterScale, specifier: "%.2f")")
-                    Slider(value: $gen.adapterScale, in: onPC ? 0.1...1.0 : 0.2...1.5, step: 0.05)
-                }
-                Button("Insert trigger \"\(t)\"") {
-                    if !gen.style.lowercased().contains(t.lowercased()) {
-                        gen.style = gen.style.isEmpty ? t + ", " : t + ", " + gen.style
-                    }
+    // MARK: Simple
+
+    private var simpleForm: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack(alignment: .topLeading) {
+                TextEditor(text: $gen.songDescription)
+                    .focused($focused)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 120)
+                    .foregroundStyle(Theme.text)
+                    .font(.body)
+                if gen.songDescription.isEmpty {
+                    Text("Describe your song, e.g. a late-night R&B song about city lights and missing someone")
+                        .foregroundStyle(Theme.faint).padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
                 }
             }
-        } header: {
-            Text("Your sound")
-        } footer: {
-            Text(onPC ? "Styles trained on your PC. Download them in the PC tab to use them offline too."
-                      : "Styles you've downloaded from your PC or imported as .safetensors files.")
+            .card(padding: 10)
+            tagRow(Self.genres + Self.vibes, into: $gen.songDescription)
+            HStack {
+                Chip(title: "Instrumental", icon: gen.instrumental ? "checkmark" : "pianokeys", selected: gen.instrumental) {
+                    gen.instrumental.toggle()
+                }
+                Spacer()
+            }
         }
     }
 
-    @ViewBuilder private var lyricsSection: some View {
-        Section {
-            Toggle("Instrumental", isOn: $gen.instrumental)
-            if !gen.instrumental {
-                TextEditor(text: $gen.lyrics)
-                    .frame(minHeight: 160)
-                    .font(.body.monospaced())
-                    .overlay(alignment: .topLeading) {
+    // MARK: Custom
+
+    private var customForm: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("Lyrics", trailing: AnyView(
+                    Chip(title: "Instrumental", icon: gen.instrumental ? "checkmark" : nil, selected: gen.instrumental) {
+                        gen.instrumental.toggle()
+                    }))
+                if !gen.instrumental {
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $gen.lyrics)
+                            .focused($focused)
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 200)
+                            .font(.body.monospaced())
+                            .foregroundStyle(Theme.text)
                         if gen.lyrics.isEmpty {
-                            Text("[Verse]\nYour lines here\n\n[Chorus]\nThe hook")
-                                .foregroundStyle(.tertiary)
-                                .font(.body.monospaced())
-                                .padding(.top, 8).padding(.leading, 4)
-                                .allowsHitTesting(false)
+                            Text("[Verse]\nWrite your lines here\n\n[Chorus]\nThe hook\n\nLeave empty and the songwriter writes them.")
+                                .font(.body.monospaced()).foregroundStyle(Theme.faint)
+                                .padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
                         }
                     }
+                    .card(padding: 10)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("Style of music")
+                TextField("", text: $gen.style, prompt: Text("melodic trap, 808s, airy pads, male vocal").foregroundColor(Theme.faint), axis: .vertical)
+                    .focused($focused)
+                    .lineLimit(1...4)
+                    .foregroundStyle(Theme.text)
+                    .card(padding: 12)
+                tagRow(Self.genres + Self.vibes, into: $gen.style)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("Title")
+                TextField("", text: $gen.title, prompt: Text("Optional").foregroundColor(Theme.faint))
+                    .focused($focused)
+                    .foregroundStyle(Theme.text)
+                    .card(padding: 12)
+            }
+        }
+    }
+
+    private func tagRow(_ tags: [String], into text: Binding<String>) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(tags, id: \.self) { tag in
+                    let on = text.wrappedValue.lowercased().contains(tag)
+                    Chip(title: tag, selected: on) {
+                        var t = text.wrappedValue
+                        if on {
+                            t = t.replacingOccurrences(of: ", \(tag)", with: "").replacingOccurrences(of: tag, with: "")
+                            t = t.trimmingCharacters(in: CharacterSet(charactersIn: ", ").union(.whitespaces))
+                        } else {
+                            t = t.trimmingCharacters(in: .whitespaces)
+                            t = t.isEmpty ? tag : t + ", " + tag
+                        }
+                        text.wrappedValue = t
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        }
+    }
+
+    // MARK: Your sound (styles)
+
+    private var styleNames: [String] {
+        onPC ? hub.styles.filter(\.pc_ready).map(\.name) : adapters.adapters.map(AdapterStore.name)
+    }
+
+    private var soundRow: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel("Your sound")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 14) {
+                    styleBubble(name: "Base", selected: gen.styleName == nil, seed: "base") { select(nil) }
+                    ForEach(styleNames, id: \.self) { n in
+                        styleBubble(name: n, selected: gen.styleName == n, seed: n) { select(n) }
+                    }
+                    Button {
+                        if onPC { gen.target = .pc } else { importing = true }
+                    } label: {
+                        VStack(spacing: 6) {
+                            Circle().fill(Theme.card).overlay(Circle().stroke(Theme.stroke))
+                                .overlay(Image(systemName: "plus").font(.title3.weight(.semibold)).foregroundStyle(Theme.muted))
+                                .frame(width: 58, height: 58)
+                            Text(onPC ? "Train on PC" : "Import").font(.caption).foregroundStyle(Theme.muted)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            if gen.styleName != nil {
+                HStack {
+                    Text("Strength").font(.subheadline).foregroundStyle(Theme.muted)
+                    Slider(value: $gen.adapterScale, in: onPC ? 0.1...1.0 : 0.2...1.5, step: 0.05).tint(Theme.accent)
+                    Text(String(format: "%.2f", gen.adapterScale)).font(.caption.monospacedDigit()).foregroundStyle(Theme.muted)
+                }
+            }
+        }
+    }
+
+    private func select(_ name: String?) {
+        if onPC {
+            gen.pcStyle = name
+        } else {
+            gen.adapter = name.flatMap { n in adapters.adapters.first { AdapterStore.name($0) == n } }
+        }
+    }
+
+    private func styleBubble(name: String, selected: Bool, seed: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                ZStack {
+                    SongArt(seed: seed, size: 58).clipShape(Circle())
+                    Text(String(name.prefix(2)).uppercased()).font(.headline.weight(.heavy)).foregroundStyle(.white)
+                }
+                .overlay(Circle().stroke(selected ? Color.white : Color.clear, lineWidth: 2.5).padding(-3))
+                Text(name).font(.caption).foregroundStyle(selected ? Theme.text : Theme.muted).lineLimit(1).frame(maxWidth: 72)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: Options
+
+    private var optionsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button {
+                withAnimation(.snappy) { showOptions.toggle() }
+            } label: {
+                HStack {
+                    Text("More options").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                    Spacer()
+                    Text(Self.time(min(gen.duration, limit))).font(.subheadline.monospacedDigit()).foregroundStyle(Theme.muted)
+                    Image(systemName: "chevron.down").rotationEffect(.degrees(showOptions ? 180 : 0)).foregroundStyle(Theme.muted)
+                }
+            }
+            .buttonStyle(.plain)
+            if showOptions {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Length").font(.caption).foregroundStyle(Theme.muted)
+                    Slider(value: $gen.duration, in: 10...max(limit, 20), step: 5).tint(Theme.accent)
+                    if !onPC && models.liteActive {
+                        Text("Lite mode: up to \(Self.time(limit)) on this iPhone.").font(.caption2).foregroundStyle(Theme.faint)
+                    }
+                }
                 Picker("Vocal language", selection: $gen.language) {
                     ForEach(languages, id: \.0) { Text($0.1).tag($0.0) }
                 }
-            }
-        } header: {
-            Text("Lyrics")
-        } footer: {
-            if !gen.instrumental {
-                Text("Section tags like [Verse], [Chorus], [Bridge] shape the structure.")
+                .tint(Theme.text)
+                Toggle("Reuse seed", isOn: $gen.lockSeed).tint(Theme.accent)
+                if gen.lockSeed {
+                    TextField("Seed", text: $gen.seedText).keyboardType(.numberPad).foregroundStyle(Theme.text)
+                }
             }
         }
+        .foregroundStyle(Theme.text)
+        .card()
     }
 
-    @ViewBuilder private var actionSection: some View {
-        Section {
-            if gen.running {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text(onPC ? gen.remoteMessage : gen.stage.label)
-                        Spacer()
-                        if let start = gen.startedAt {
-                            Text(start, style: .timer).monospacedDigit().foregroundStyle(.secondary)
-                        }
-                    }
-                    ProgressView(value: gen.progress)
-                    Text(onPC ? "You can lock your phone; come back to collect the song."
-                              : "Keep Signature open. The screen won't lock while it works.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                Button(onPC ? "Stop waiting" : "Cancel", role: .destructive) { gen.cancel() }
-            } else {
-                Button {
-                    if onPC {
-                        gen.startRemote(hub: hub, library: library)
-                    } else if let p = models.paths {
-                        gen.start(models: p, library: library)
-                    }
-                } label: {
-                    Label(onPC ? "Generate on \(hub.pairing?.name ?? "PC")" : "Generate song",
-                          systemImage: onPC ? "desktopcomputer" : "sparkles")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(onPC ? !hub.canGenerate : !models.isReady)
-            }
-            if let e = gen.error {
-                Text(e).foregroundStyle(.red)
-            }
-            if let s = gen.lastSong, !gen.running {
-                Button {
-                    player.toggle(s, url: library.url(for: s))
-                } label: {
-                    Label(player.current == s.id ? "Stop" : "Play \"\(s.title)\"",
-                          systemImage: player.current == s.id ? "stop.fill" : "play.fill")
+    // MARK: Recent
+
+    @ViewBuilder private var recent: some View {
+        if !library.songs.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionLabel("Recent")
+                ForEach(library.songs.prefix(4)) { s in
+                    SongRow(song: s, playing: player.current == s.id && player.isPlaying)
+                        .onTapGesture { player.play(s, library: library) }
                 }
             }
         }

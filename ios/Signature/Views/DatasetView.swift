@@ -90,6 +90,7 @@ struct DatasetView: View {
                 Section { ProgressView() }
             }
         }
+        .screen()
         .navigationTitle(name)
         .toolbar {
             Menu {

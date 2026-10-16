@@ -25,6 +25,16 @@ if [ ! -f "$VENDOR/src/pipeline-synth.h" ]; then
     git -C "$VENDOR" submodule update -q --init --depth 1 ggml
 fi
 
+echo "==> Applying Signature engine patches"
+for p in "$HERE"/engine/patches/*.patch; do
+    if git -C "$VENDOR" apply --reverse --check "$p" 2>/dev/null; then
+        echo "    already applied: $(basename "$p")"
+    else
+        git -C "$VENDOR" apply "$p"
+        echo "    applied: $(basename "$p")"
+    fi
+done
+
 echo "==> Configuring for iOS arm64 (Metal, Accelerate)"
 cmake -S "$HERE/engine" -B "$BUILD" -G Xcode \
     -DACESTEP_DIR="$VENDOR" \

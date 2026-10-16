@@ -13,6 +13,8 @@ struct Song: Identifiable, Codable, Hashable {
     var created: Date
     var fileName: String
     var madeOn: String?   // "iPhone" or the PC's name
+    var model: String?    // model display name
+    var prompt: String?   // the description / style typed in
 }
 
 /// Generated songs live in Documents/Songs (visible in the Files app) with a JSON index.

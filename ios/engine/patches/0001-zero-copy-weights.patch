@@ -1,0 +1,245 @@
+diff --git a/src/gguf-weights.h b/src/gguf-weights.h
+index 6adc2b0..89c3655 100644
+--- a/src/gguf-weights.h
++++ b/src/gguf-weights.h
+@@ -62,6 +62,7 @@ static void gf_close(GGUFModel * gf) {
+     }
+ #else
+     if (gf->mapping) {
++        wctx_unregister_mapping(gf->mapping);
+         munmap(gf->mapping, gf->file_size);
+     }
+     if (gf->fd >= 0) {
+@@ -115,6 +116,10 @@ static bool gf_load(GGUFModel * gf, const char * path) {
+     }
+ #endif
+ 
++#ifndef _WIN32
++    wctx_register_mapping(gf->mapping, gf->file_size, path);
++#endif
++
+     // Parse GGUF header, create tensor metadata context
+     struct ggml_context *   meta   = NULL;
+     struct gguf_init_params params = { /*no_alloc=*/true, /*ctx=*/&meta };
+diff --git a/src/weight-ctx.h b/src/weight-ctx.h
+index e43f573..7c46686 100644
+--- a/src/weight-ctx.h
++++ b/src/weight-ctx.h
+@@ -14,10 +14,58 @@
+ #include "ggml.h"
+ 
+ #include <cstddef>
++#include <cstdint>
+ #include <cstdio>
+ #include <memory>
++#include <mutex>
++#include <string>
+ #include <vector>
+ 
++#ifndef _WIN32
++#    include <fcntl.h>
++#    include <sys/mman.h>
++#    include <unistd.h>
++#endif
++
++// ---------------------------------------------------------------------------
++// Zero-copy weights (Signature patch).
++//
++// When enabled and the backend device can wrap host memory (Metal on Apple
++// unified memory, CPU), weights that are used exactly as stored in the GGUF
++// are not copied into a freshly allocated backend buffer. Instead the GGUF is
++// mmapped and the mapping itself becomes the weight buffer. On iOS those pages
++// are clean and file-backed, so they don't count against the app's memory
++// limit the way a private copy does - this is what lets the models run on
++// 4 GB iPhones. Tensors that are converted, fused or adapter-merged at load
++// time still get a normal copy.
++// ---------------------------------------------------------------------------
++inline bool g_wctx_zero_copy = false;
++
++struct WctxMapping {
++    const uint8_t * base;
++    size_t          size;
++    std::string     path;
++};
++
++inline std::mutex &               wctx_map_mutex() { static std::mutex m; return m; }
++inline std::vector<WctxMapping> & wctx_maps() { static std::vector<WctxMapping> v; return v; }
++
++static void wctx_register_mapping(const void * base, size_t size, const char * path) {
++    std::lock_guard<std::mutex> lock(wctx_map_mutex());
++    wctx_maps().push_back({ (const uint8_t *) base, size, path ? path : "" });
++}
++
++static void wctx_unregister_mapping(const void * base) {
++    std::lock_guard<std::mutex> lock(wctx_map_mutex());
++    auto & v = wctx_maps();
++    for (size_t i = 0; i < v.size(); i++) {
++        if (v[i].base == base) {
++            v.erase(v.begin() + (long) i);
++            return;
++        }
++    }
++}
++
+ struct WeightCtx {
+     struct ggml_context * ctx;
+     ggml_backend_buffer_t buffer;
+@@ -35,6 +83,15 @@ struct WeightCtx {
+     // unique_ptr keeps the data address stable even when the outer vector grows,
+     // so src pointers stored in pending stay valid across staging.push_back().
+     std::vector<std::unique_ptr<float[]>> staging;
++
++    // Zero-copy: buffers wrapping our own read-only mmaps of the GGUF files.
++    struct OwnedMap {
++        void * ptr;
++        size_t size;
++    };
++    std::vector<ggml_backend_buffer_t> mapped_buffers;
++    std::vector<OwnedMap>              owned_maps;
++    size_t                             mapped_bytes = 0;
+ };
+ 
+ static void wctx_init(WeightCtx * wctx, int n_tensors) {
+@@ -48,24 +105,115 @@ static void wctx_init(WeightCtx * wctx, int n_tensors) {
+     wctx->buffer = NULL;
+     wctx->pending.clear();
+     wctx->pending.reserve(n_tensors);
++    wctx->mapped_buffers.clear();
++    wctx->owned_maps.clear();
++    wctx->mapped_bytes = 0;
+ }
+ 
++#ifndef _WIN32
++// Place eligible pending tensors directly on an mmap of their source file.
++static void wctx_map_weights(WeightCtx * wctx, ggml_backend_t backend) {
++    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
++    if (!dev) {
++        return;
++    }
++    struct ggml_backend_dev_props props;
++    ggml_backend_dev_get_props(dev, &props);
++    if (!props.caps.buffer_from_host_ptr) {
++        return;
++    }
++
++    std::vector<WctxMapping> maps;
++    {
++        std::lock_guard<std::mutex> lock(wctx_map_mutex());
++        maps = wctx_maps();
++    }
++
++    for (const WctxMapping & m : maps) {
++        std::vector<size_t> idx;
++        size_t              max_tensor = 0;
++        for (size_t i = 0; i < wctx->pending.size(); i++) {
++            const auto &    pc  = wctx->pending[i];
++            const uint8_t * src = (const uint8_t *) pc.src;
++            if (pc.offset != 0 || pc.nbytes == 0 || pc.nbytes != ggml_nbytes(pc.tensor)) {
++                continue;  // fused / partial copy
++            }
++            if (src < m.base || src + pc.nbytes > m.base + m.size) {
++                continue;  // staging data (converted or adapter-merged)
++            }
++            idx.push_back(i);
++            max_tensor = pc.nbytes > max_tensor ? pc.nbytes : max_tensor;
++        }
++        if (idx.empty() || m.path.empty()) {
++            continue;
++        }
++
++        // Our own mapping: the loader unmaps its copy right after wctx_alloc.
++        int fd = open(m.path.c_str(), O_RDONLY);
++        if (fd < 0) {
++            continue;
++        }
++        void * ptr = mmap(NULL, m.size, PROT_READ, MAP_SHARED, fd, 0);
++        close(fd);
++        if (ptr == MAP_FAILED) {
++            continue;
++        }
++        ggml_backend_buffer_t buf = ggml_backend_dev_buffer_from_host_ptr(dev, ptr, m.size, max_tensor);
++        if (!buf) {
++            munmap(ptr, m.size);
++            continue;
++        }
++        ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++
++        size_t bytes = 0;
++        for (size_t i : idx) {
++            auto & pc   = wctx->pending[i];
++            void * addr = (uint8_t *) ptr + ((const uint8_t *) pc.src - m.base);
++            if (ggml_backend_tensor_alloc(buf, pc.tensor, addr) == GGML_STATUS_SUCCESS) {
++                bytes += pc.nbytes;
++                pc.nbytes = 0;  // mapped, nothing to copy
++            }
++        }
++        wctx->mapped_buffers.push_back(buf);
++        wctx->owned_maps.push_back({ ptr, m.size });
++        wctx->mapped_bytes += bytes;
++    }
++}
++#endif
++
+ static bool wctx_alloc(WeightCtx * wctx, ggml_backend_t backend) {
+-    wctx->buffer = ggml_backend_alloc_ctx_tensors(wctx->ctx, backend);
+-    if (!wctx->buffer) {
+-        fprintf(stderr, "[WeightCtx] FATAL: failed to allocate backend buffer\n");
+-        return false;
++#ifndef _WIN32
++    if (g_wctx_zero_copy) {
++        wctx_map_weights(wctx, backend);
++    }
++#endif
++    bool need_alloc = false;
++    for (ggml_tensor * t = ggml_get_first_tensor(wctx->ctx); t; t = ggml_get_next_tensor(wctx->ctx, t)) {
++        if (t->data == NULL && t->view_src == NULL) {
++            need_alloc = true;
++            break;
++        }
++    }
++    if (need_alloc) {
++        wctx->buffer = ggml_backend_alloc_ctx_tensors(wctx->ctx, backend);
++        if (!wctx->buffer) {
++            fprintf(stderr, "[WeightCtx] FATAL: failed to allocate backend buffer\n");
++            return false;
++        }
++        // Mark as weight buffer so ggml_backend_sched assigns ops to the correct
++        // backend based on weight location (avoids fallback through expansion).
++        ggml_backend_buffer_set_usage(wctx->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+     }
+-    // Mark as weight buffer so ggml_backend_sched assigns ops to the correct
+-    // backend based on weight location (avoids fallback through expansion).
+-    ggml_backend_buffer_set_usage(wctx->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+     size_t total = 0;
+     for (auto & pc : wctx->pending) {
++        if (pc.nbytes == 0) {
++            continue;
++        }
+         ggml_backend_tensor_set(pc.tensor, pc.src, pc.offset, pc.nbytes);
+         total += pc.nbytes;
+     }
+-    fprintf(stderr, "[WeightCtx] Loaded %zu tensors, %.1f MB into backend\n", wctx->pending.size(),
+-            (float) total / (1024 * 1024));
++    fprintf(stderr, "[WeightCtx] Loaded %zu tensors, %.1f MB copied, %.1f MB mapped\n", wctx->pending.size(),
++            (float) total / (1024 * 1024), (float) wctx->mapped_bytes / (1024 * 1024));
+     wctx->pending.clear();
+     wctx->staging.clear();
+     return true;
+@@ -75,6 +223,17 @@ static void wctx_free(WeightCtx * wctx) {
+     if (wctx->buffer) {
+         ggml_backend_buffer_free(wctx->buffer);
+     }
++    for (ggml_backend_buffer_t b : wctx->mapped_buffers) {
++        ggml_backend_buffer_free(b);
++    }
++    wctx->mapped_buffers.clear();
++#ifndef _WIN32
++    for (auto & m : wctx->owned_maps) {
++        munmap(m.ptr, m.size);
++    }
++#endif
++    wctx->owned_maps.clear();
++    wctx->mapped_bytes = 0;
+     if (wctx->ctx) {
+         ggml_free(wctx->ctx);
+     }

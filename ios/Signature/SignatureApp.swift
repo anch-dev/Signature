@@ -1,8 +1,22 @@
 import AVFoundation
 import SwiftUI
+import UIKit
+
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    /// iOS relaunches the app in the background when model downloads finish.
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
+                     completionHandler: @escaping () -> Void) {
+        if identifier == BackgroundDownloader.identifier {
+            BackgroundDownloader.shared.backgroundCompletion = completionHandler
+        } else {
+            completionHandler()
+        }
+    }
+}
 
 @main
 struct SignatureApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var models = ModelManager()
     @StateObject private var library = Library()
     @StateObject private var adapters = AdapterStore()
@@ -14,32 +28,48 @@ struct SignatureApp: App {
 
     init() {
         try? AVAudioSession.sharedInstance().setCategory(.playback)
+        let bar = UITabBarAppearance()
+        bar.configureWithOpaqueBackground()
+        bar.backgroundColor = UIColor(Theme.bg)
+        UITabBar.appearance().standardAppearance = bar
+        UITabBar.appearance().scrollEdgeAppearance = bar
+        let nav = UINavigationBarAppearance()
+        nav.configureWithOpaqueBackground()
+        nav.backgroundColor = UIColor(Theme.bg)
+        nav.shadowColor = .clear
+        nav.titleTextAttributes = [.foregroundColor: UIColor.white]
+        nav.largeTitleTextAttributes = [.foregroundColor: UIColor.white]
+        UINavigationBar.appearance().standardAppearance = nav
+        UINavigationBar.appearance().scrollEdgeAppearance = nav
     }
 
     var body: some Scene {
         WindowGroup {
             TabView(selection: $tab) {
-                CreateView()
-                    .tabItem { Label("Create", systemImage: "waveform") }
+                CreateView().withMiniPlayer()
+                    .tabItem { Label("Create", systemImage: "sparkles") }
                     .tag(0)
-                LibraryView()
+                LibraryView().withMiniPlayer()
                     .tabItem { Label("Library", systemImage: "music.note.list") }
                     .tag(1)
-                PCView()
+                PCView().withMiniPlayer()
                     .tabItem { Label("PC", systemImage: "desktopcomputer") }
                     .tag(2)
-                SetupView()
-                    .tabItem { Label("Models", systemImage: "square.and.arrow.down") }
+                SettingsView().withMiniPlayer()
+                    .tabItem { Label("Settings", systemImage: "gearshape") }
                     .tag(3)
             }
+            .tint(.white)
+            .preferredColorScheme(.dark)
             .environmentObject(models)
             .environmentObject(library)
             .environmentObject(adapters)
             .environmentObject(generator)
             .environmentObject(player)
             .environmentObject(hub)
-            .onAppear {
-                if !models.isReady && !hub.isPaired { tab = 3 }
+            .onChange(of: generator.lastSong?.id) { _ in
+                // New song: start playing it right away, like Suno.
+                if let s = generator.lastSong { player.play(s, library: library) }
             }
             .onOpenURL { url in
                 if url.scheme == "signature" {
@@ -53,40 +83,25 @@ struct SignatureApp: App {
                 }
             }
             .onChange(of: phase) { p in
-                if p == .active { hub.startPolling() } else if p == .background { hub.stopPolling() }
+                if p == .active {
+                    hub.startPolling()
+                    models.refresh()
+                } else if p == .background {
+                    hub.stopPolling()
+                }
             }
         }
     }
 }
 
-@MainActor
-final class Player: NSObject, ObservableObject, AVAudioPlayerDelegate {
-    @Published private(set) var current: Song.ID?
-    private var audio: AVAudioPlayer?
-
-    func toggle(_ song: Song, url: URL) {
-        if current == song.id {
-            stop()
-            return
-        }
-        do {
-            try AVAudioSession.sharedInstance().setActive(true)
-            audio = try AVAudioPlayer(contentsOf: url)
-            audio?.delegate = self
-            audio?.play()
-            current = song.id
-        } catch {
-            current = nil
+private struct MiniPlayerInset: ViewModifier {
+    func body(content: Content) -> some View {
+        content.safeAreaInset(edge: .bottom, spacing: 0) {
+            MiniPlayer().padding(.bottom, 4)
         }
     }
+}
 
-    func stop() {
-        audio?.stop()
-        audio = nil
-        current = nil
-    }
-
-    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor in self.current = nil }
-    }
+extension View {
+    func withMiniPlayer() -> some View { modifier(MiniPlayerInset()) }
 }

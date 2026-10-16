@@ -6,7 +6,7 @@ enum GenStage: Int {
 
     var label: String {
         switch self {
-        case .songwriter: return "Writing the song plan"
+        case .songwriter: return "Writing the song"
         case .diffusion: return "Generating audio"
         case .decode: return "Rendering"
         case .saving: return "Saving"
@@ -31,9 +31,15 @@ struct ModelPaths {
     var vae: URL
 }
 
+struct EngineOptions: Equatable {
+    var zeroCopy = true
+    var lowMemory = false
+    var useCPU = false
+}
+
 struct SongRequest {
     var caption: String
-    var lyrics: String
+    var lyrics: String        // "" with songwriter = it writes them (Simple mode)
     var language: String      // "" = auto
     var duration: Double
     var bpm: Int              // 0 = auto
@@ -47,6 +53,9 @@ struct SongResult {
     var bpm: Int
     var key: String
     var duration: Double
+    var caption: String
+    var lyrics: String
+    var peakBytes: [UInt64]   // per stage
 }
 
 enum SongEngineError: LocalizedError {
@@ -62,12 +71,13 @@ enum SongEngineError: LocalizedError {
 }
 
 /// Owns the native engine. Generation runs on its own serial queue because a
-/// song takes minutes of blocking Metal work.
+/// song takes minutes of blocking Metal (or CPU) work.
 final class SongEngine: @unchecked Sendable {
     static let shared = SongEngine()
 
     private let handle: OpaquePointer?
     private let queue = DispatchQueue(label: "signature.engine", qos: .userInitiated)
+    private var applied: EngineOptions?
 
     private init() {
         handle = ace_engine_create()
@@ -76,6 +86,8 @@ final class SongEngine: @unchecked Sendable {
     deinit {
         ace_engine_free(handle)
     }
+
+    static var footprint: UInt64 { ace_memory_footprint() }
 
     private final class Box {
         let onProgress: (GenStage, Double) -> Void
@@ -90,6 +102,7 @@ final class SongEngine: @unchecked Sendable {
     func generate(
         _ request: SongRequest,
         models: ModelPaths,
+        options: EngineOptions,
         output: URL,
         onProgress: @escaping (GenStage, Double) -> Void,
         isCancelled: @escaping () -> Bool
@@ -98,6 +111,14 @@ final class SongEngine: @unchecked Sendable {
 
         return try await withCheckedThrowingContinuation { cont in
             queue.async {
+                if self.applied != options {
+                    var o = ace_engine_options(zero_copy: options.zeroCopy ? 1 : 0,
+                                               low_memory: options.lowMemory ? 1 : 0,
+                                               use_cpu: options.useCPU ? 1 : 0)
+                    ace_engine_set_options(handle, &o)
+                    self.applied = options
+                }
+
                 let box = Box(onProgress: onProgress, isCancelled: isCancelled)
                 let user = Unmanaged.passRetained(box).toOpaque()
                 defer { Unmanaged<Box>.fromOpaque(user).release() }
@@ -113,8 +134,8 @@ final class SongEngine: @unchecked Sendable {
 
                 // Keep every C string alive for the whole call.
                 var owned: [UnsafeMutablePointer<CChar>] = []
-                func c(_ s: String?) -> UnsafePointer<CChar>? {
-                    guard let s, !s.isEmpty, let p = strdup(s) else { return nil }
+                func c(_ s: String?, keepEmpty: Bool = false) -> UnsafePointer<CChar>? {
+                    guard let s, keepEmpty || !s.isEmpty, let p = strdup(s) else { return nil }
                     owned.append(p)
                     return UnsafePointer(p)
                 }
@@ -130,33 +151,45 @@ final class SongEngine: @unchecked Sendable {
                 )
                 var req = ace_song_request(
                     caption: c(request.caption),
-                    lyrics: c(request.lyrics),
+                    lyrics: c(request.lyrics, keepEmpty: true),
                     vocal_language: c(request.language),
                     duration: Float(request.duration),
                     bpm: Int32(request.bpm),
                     seed: request.seed,
                     inference_steps: 0
                 )
-                var info = ace_song_info()
+                // ace_song_info is large (lyrics buffer); keep it on the heap.
+                let info = UnsafeMutablePointer<ace_song_info>.allocate(capacity: 1)
+                defer { info.deallocate() }
                 var err = [CChar](repeating: 0, count: 512)
 
                 let rc = ace_engine_generate(
-                    handle, &paths, &req, c(output.path), callback, user, &info, &err, Int32(err.count)
+                    handle, &paths, &req, c(output.path), callback, user, info, &err, Int32(err.count)
                 )
 
                 switch rc {
                 case 0:
-                    let key = withUnsafeBytes(of: info.keyscale) { raw in
-                        String(cString: raw.bindMemory(to: CChar.self).baseAddress!)
-                    }
+                    let i = info.pointee
+                    let peaks = withUnsafeBytes(of: i.peak_bytes) { Array($0.bindMemory(to: UInt64.self)) }
                     cont.resume(returning: SongResult(
-                        seed: info.seed_used, bpm: Int(info.bpm), key: key, duration: Double(info.duration)))
+                        seed: i.seed_used, bpm: Int(i.bpm),
+                        key: Self.string(i.keyscale), duration: Double(i.duration),
+                        caption: Self.string(i.caption), lyrics: Self.string(i.lyrics),
+                        peakBytes: peaks))
                 case 1:
                     cont.resume(returning: nil)
                 default:
                     cont.resume(throwing: SongEngineError.failed(String(cString: err)))
                 }
             }
+        }
+    }
+
+    /// Fixed-size C char arrays import as tuples; read them as C strings.
+    private static func string<T>(_ tuple: T) -> String {
+        withUnsafeBytes(of: tuple) { raw in
+            guard let base = raw.bindMemory(to: CChar.self).baseAddress else { return "" }
+            return String(cString: base)
         }
     }
 }

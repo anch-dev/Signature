@@ -16,6 +16,7 @@ struct PCView: View {
             Group {
                 if hub.isPaired { paired } else { unpaired }
             }
+            .screen()
             .navigationTitle(hub.pairing?.name ?? "PC")
             .refreshable { await hub.refresh() }
             .task { if hub.isPaired { await hub.refresh(); hub.startPolling() } }

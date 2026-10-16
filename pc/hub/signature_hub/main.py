@@ -198,6 +198,7 @@ class GenBody(BaseModel):
     style_scale: float = Field(default=1.0, ge=0, le=2)
     seed: int = -1
     bpm: int = 0
+    simple: bool = False
 
 
 @app.post("/api/generate", dependencies=[Depends(auth)])
@@ -207,7 +208,8 @@ async def generate(body: GenBody):
     if body.style:
         datasets.check_name(body.style)
     job = gen.submit(caption=body.caption, lyrics=body.lyrics, duration=body.duration, language=body.language,
-                     adapter=body.style, adapter_scale=body.style_scale, seed=body.seed, bpm=body.bpm)
+                     adapter=body.style, adapter_scale=body.style_scale, seed=body.seed, bpm=body.bpm,
+                     simple=body.simple)
     return job.public()
 
 

@@ -25,7 +25,7 @@ struct HubStatus: Decodable {
 }
 
 struct RemoteJob: Decodable, Identifiable {
-    struct Meta: Decodable { var bpm: Int?; var key: String?; var duration: Double?; var seed: Int64? }
+    struct Meta: Decodable { var bpm: Int?; var key: String?; var duration: Double?; var seed: Int64?; var lyrics: String? }
     var id: String
     var caption: String
     var lyrics: String
