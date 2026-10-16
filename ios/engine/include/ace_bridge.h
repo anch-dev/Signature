@@ -30,6 +30,7 @@ typedef struct {
     int zero_copy;   // map model files instead of copying weights (default 1)
     int low_memory;  // smaller KV cache and decode tiles for 4 GB devices (default 0)
     int use_cpu;     // 1 = run on the CPU cores (NEON) instead of the GPU (Metal). Slower, same RAM.
+    int verbose;     // 1 = dump requests, per-stage timing and memory to stderr
 } ace_engine_options;
 
 typedef struct {

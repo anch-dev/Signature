@@ -115,7 +115,7 @@ final class ModelManager: ObservableObject {
     var liteActive: Bool { performance == .lite || (performance == .auto && Device.isLowMemory) }
 
     var engineOptions: EngineOptions {
-        EngineOptions(zeroCopy: zeroCopy, lowMemory: liteActive, useCPU: useCPU)
+        EngineOptions(zeroCopy: zeroCopy, lowMemory: liteActive, useCPU: useCPU, verbose: LogCapture.shared.verbose)
     }
 
     /// Longest song this phone can render without being killed for memory.
@@ -143,6 +143,7 @@ final class ModelManager: ObservableObject {
     }
 
     func select(_ m: MusicModel, _ q: Quant) {
+        LogCapture.shared.log("Music model: \(m.name) \(q.rawValue)")
         musicID = m.id
         musicQuant = q
     }
@@ -167,6 +168,7 @@ final class ModelManager: ObservableObject {
         }
         errors[f.id] = nil
         progress[f.id] = 0
+        LogCapture.shared.log("Download started: \(f.id) (\(Self.format(f.bytes)))")
         BackgroundDownloader.shared.start(f)
     }
 
@@ -221,10 +223,13 @@ final class ModelManager: ObservableObject {
     // MARK: downloader callbacks
 
     fileprivate func didProgress(_ name: String, _ p: Double) {
+        let before = Int((progress[name] ?? 0) * 10)
         if progress[name] != nil || p < 1 { progress[name] = p }
+        if Int(p * 10) > before { LogCapture.shared.debug("Download \(name): \(Int(p * 100))%") }
     }
 
     fileprivate func didFinish(_ name: String, error: String?) {
+        LogCapture.shared.log(error.map { "Download \(name) failed: \($0)" } ?? "Download finished: \(name)")
         progress[name] = nil
         if let error { errors[name] = error } else { errors[name] = nil }
         refresh()

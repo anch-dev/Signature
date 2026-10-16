@@ -222,6 +222,8 @@ final class Generator: ObservableObject {
         begin(usesWriter ? GenStage.songwriter.label : GenStage.diffusion.label)
         stage = usesWriter ? .songwriter : .diffusion
         etaGuess = historyRate(etaKey).map { $0 * request.duration }
+        LogCapture.shared.debug("Request: caption=\"\(request.caption)\" lyrics=\(request.lyrics.isEmpty ? "(songwriter writes)" : "\(request.lyrics.count) chars") language=\(request.language.isEmpty ? "auto" : request.language) seed=\(request.seed) style=\(styleName ?? "base") scale=\(request.adapterScale) task=\(request.task)")
+        LogCapture.shared.debug("Device: memory budget \(String(format: "%.2f", Device.budgetGB)) GB, max length \(Int(models.maxDuration))s, ETA guess \(etaGuess.map { "\(Int($0))s" } ?? "none")")
         updateETA()
         LogCapture.shared.log("Start: \(modelName), \(mode.title), \(Int(request.duration))s, \(options.useCPU ? "CPU" : "GPU")\(options.lowMemory ? ", Lite" : "")")
         UIApplication.shared.isIdleTimerDisabled = true  // screen lock suspends GPU work
@@ -237,6 +239,7 @@ final class Generator: ObservableObject {
                             guard let self else { return }
                             self.stage = s
                             self.statusText = s.label
+                            if s != self.stage { LogCapture.shared.debug("Stage: \(s.label) at \(Int(value * 100))%") }
                             self.progress = max(self.progress, value)
                             self.updateETA()
                         }

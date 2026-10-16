@@ -28,6 +28,11 @@ struct SignatureApp: App {
 
     init() {
         LogCapture.shared.start()
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        var sys = utsname()
+        uname(&sys)
+        let machine = withUnsafeBytes(of: sys.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+        LogCapture.shared.log("Signature \(v) on \(machine), iOS \(UIDevice.current.systemVersion), RAM \(ProcessInfo.processInfo.physicalMemory / 1_073_741_824) GB, app budget \(String(format: "%.2f", Device.budgetGB)) GB")
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         let bar = UITabBarAppearance()
         bar.configureWithOpaqueBackground()

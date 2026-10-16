@@ -355,6 +355,7 @@ struct ModelsView: View {
 }
 
 struct SettingsView: View {
+    @ObservedObject private var log = LogCapture.shared
     @EnvironmentObject var models: ModelManager
     @EnvironmentObject var adapters: AdapterStore
     @EnvironmentObject var gen: Generator
@@ -392,7 +393,6 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    NavigationLink { TerminalView() } label: { Label("Status terminal", systemImage: "terminal") }
                     LabeledContent("Memory for Signature", value: String(format: "%.1f GB", Device.budgetGB))
                     LabeledContent("Longest song", value: CreateView.time(models.maxDuration))
                     if models.lastPeaks.count == 4 {
@@ -436,6 +436,17 @@ struct SettingsView: View {
                     Text("Your styles on this iPhone")
                 } footer: {
                     Text("Styles you train on a PC, downloaded from the PC tab or imported as .safetensors.")
+                }
+
+                Section {
+                    Toggle("Verbose logging", isOn: $log.verbose)
+                    NavigationLink { TerminalView() } label: { Label("Status terminal", systemImage: "terminal") }
+                    ShareLink(item: LogCapture.shared.todayLogURL) { Label("Share today's log", systemImage: "square.and.arrow.up") }
+                    Button { FilesApp.reveal(LogCapture.shared.todayLogURL) } label: { Label("Open logs in Files", systemImage: "folder") }
+                } header: {
+                    Text("Logging")
+                } footer: {
+                    Text("Verbose adds every request, stage timing, memory use, download progress and PC call to the log. Logs are saved in Files → Signature → Logs for 7 days. Send them when something goes wrong.")
                 }
 
                 Section("About") {

@@ -15,6 +15,7 @@
 #include "task-types.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -31,7 +32,7 @@
 struct ace_engine {
     ModelStore *       store = nullptr;
     std::mutex         busy;  // one song at a time
-    ace_engine_options opts{ 1, 0, 0 };
+    ace_engine_options opts{ 1, 0, 0, 0 };
 };
 
 extern "C" uint64_t ace_memory_footprint(void) {
@@ -97,6 +98,25 @@ void report(ace_progress_fn fn, void * user, ace_stage s, float f, bool * cancel
         *cancelled = true;
     }
 }
+
+double now_s() {
+    using namespace std::chrono;
+    return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
+struct Verbose {
+    bool   on = false;
+    double t0 = now_s(), stage_t = now_s();
+    void   stage(const char * name) {
+        if (!on) {
+            return;
+        }
+        double t = now_s();
+        fprintf(stderr, "[Signature] %-11s done in %6.2fs (total %6.2fs), memory %.0f MB\n", name, t - stage_t, t - t0,
+                (double) ace_memory_footprint() / 1048576.0);
+        stage_t = t;
+    }
+};
 
 void set_err(char * err, int len, const char * msg) {
     if (err && len > 0) {
@@ -199,7 +219,20 @@ int ace_engine_generate(ace_engine *             e,
     const float duration = task != ACE_TASK_NEW ? std::clamp(src_secs, 1.0f, maxd)
                                                 : std::clamp(r->duration > 0 ? r->duration : 60.0f, 10.0f, maxd);
 
-    Peaks peaks;
+    Peaks   peaks;
+    Verbose vb;
+    vb.on = e->opts.verbose != 0;
+    if (vb.on) {
+        fprintf(stderr, "[Signature] ---- new job ----\n");
+        fprintf(stderr, "[Signature] options: zero_copy=%d low_memory=%d cpu=%d\n", e->opts.zero_copy, e->opts.low_memory,
+                e->opts.use_cpu);
+        fprintf(stderr, "[Signature] models: lm=%s\n[Signature]         text=%s\n[Signature]         dit=%s\n"
+                        "[Signature]         vae=%s\n[Signature]         adapter=%s (scale %.2f)\n",
+                m->lm_path ? m->lm_path : "(none)", m->text_enc_path, m->dit_path, m->vae_path,
+                m->adapter_path ? m->adapter_path : "(none)", m->adapter_scale);
+        fprintf(stderr, "[Signature] task=%d src=%s memory at start %.0f MB\n", task,
+                r->src_audio_path ? r->src_audio_path : "(none)", (double) ace_memory_footprint() / 1048576.0);
+    }
 
     AceRequest req;
     request_init(&req);
@@ -234,6 +267,9 @@ int ace_engine_generate(ace_engine *             e,
 
     bool cancelled = false;
     peaks.sample(ACE_STAGE_SONGWRITER);
+    if (vb.on) {
+        request_dump(&req, stderr);
+    }
 
     // ---- 1. Songwriter (5Hz LM): lyrics if empty, BPM/key/structure, audio code plan.
     AceRequest planned = req;
@@ -279,6 +315,14 @@ int ace_engine_generate(ace_engine *             e,
     if (cancelled) {
         return 1;
     }
+    if (lm) {
+        vb.stage("songwriter");
+        if (vb.on) {
+            fprintf(stderr, "[Signature] songwriter plan: bpm=%d key=%s duration=%.1f codes=%zu chars\n", planned.bpm,
+                    planned.keyscale.c_str(), planned.duration, planned.audio_codes.size());
+            fprintf(stderr, "[Signature] lyrics used:\n%s\n", planned.lyrics.c_str());
+        }
+    }
 
     // ---- 2. Diffusion (DiT, with your adapter merged in at load).
     AceSynthParams sp;
@@ -322,6 +366,7 @@ int ace_engine_generate(ace_engine *             e,
         return -1;
     }
     report(progress, user, ACE_STAGE_DIFFUSION, 1.0f, &cancelled, &peaks);
+    vb.stage("diffusion");
 
     // ---- 3. Decode latents to audio. ~25 latent frames per second of music.
     const float latent_frames = duration * 25.0f;
@@ -329,6 +374,7 @@ int ace_engine_generate(ace_engine *             e,
     AceAudio    audio{};
     int         vrc = cancelled ? -1 : ace_synth_job_run_vae(synth, job, &audio, tick_cb, &vt);
     peaks.sample(ACE_STAGE_DECODE);
+    vb.stage("decode");
     ace_synth_job_free(job);
     ace_synth_free(synth);
     if (cancelled || vt.cancelled) {
@@ -350,6 +396,11 @@ int ace_engine_generate(ace_engine *             e,
         return -1;
     }
     report(progress, user, ACE_STAGE_SAVING, 1.0f, &cancelled, &peaks);
+    vb.stage("save");
+    if (vb.on) {
+        fprintf(stderr, "[Signature] peaks MB: songwriter %.0f, diffusion %.0f, decode %.0f, save %.0f\n",
+                peaks.v[0] / 1048576.0, peaks.v[1] / 1048576.0, peaks.v[2] / 1048576.0, peaks.v[3] / 1048576.0);
+    }
 
     if (info_out) {
         memset(info_out, 0, sizeof(*info_out));

@@ -7,6 +7,23 @@ final class LogCapture: ObservableObject, @unchecked Sendable {
     static let shared = LogCapture()
 
     @Published private(set) var lines: [String] = []
+    /// Extra detail from the app and engine (requests, timings, memory, network).
+    @Published var verbose: Bool = UserDefaults.standard.bool(forKey: "verboseLogging") {
+        didSet { UserDefaults.standard.set(verbose, forKey: "verboseLogging") }
+    }
+
+    /// Logs are also written to Documents/Logs (visible in Files), one file per day, kept 7 days.
+    let logsDir: URL = {
+        let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Logs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }()
+    private let fileQueue = DispatchQueue(label: "signature.logfile")
+    private var fileHandle: FileHandle?
+    private var fileDay = ""
+
+    var todayLogURL: URL { logsDir.appendingPathComponent("signature-\(Self.day.string(from: Date())).log") }
     private let maxLines = 3000
     private var pipe = Pipe()
     private var originalErr: Int32 = -1
@@ -33,7 +50,41 @@ final class LogCapture: ObservableObject, @unchecked Sendable {
             if passthrough >= 0 { data.withUnsafeBytes { _ = write(passthrough, $0.baseAddress, data.count) } }
             self?.ingest(String(decoding: data, as: UTF8.self))
         }
+        pruneOldLogs()
         log("Signature status terminal ready")
+    }
+
+    /// Only recorded when verbose logging is on.
+    func debug(_ message: @autoclosure () -> String) {
+        guard verbose else { return }
+        log("· " + message())
+    }
+
+    private func pruneOldLogs() {
+        let cutoff = Date().addingTimeInterval(-7 * 86_400)
+        let files = (try? FileManager.default.contentsOfDirectory(at: logsDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        for f in files where ((try? f.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date()) < cutoff {
+            try? FileManager.default.removeItem(at: f)
+        }
+    }
+
+    private func writeToFile(_ batch: [String]) {
+        fileQueue.async { [weak self] in
+            guard let self else { return }
+            let day = Self.day.string(from: Date())
+            if day != self.fileDay || self.fileHandle == nil {
+                try? self.fileHandle?.close()
+                let url = self.todayLogURL
+                if !FileManager.default.fileExists(atPath: url.path) {
+                    FileManager.default.createFile(atPath: url.path, contents: nil)
+                }
+                self.fileHandle = try? FileHandle(forWritingTo: url)
+                _ = try? self.fileHandle?.seekToEnd()
+                self.fileDay = day
+            }
+            let text = batch.joined(separator: "\n") + "\n"
+            if let data = text.data(using: .utf8) { try? self.fileHandle?.write(contentsOf: data) }
+        }
     }
 
     /// App-side messages go to the same terminal.
@@ -75,12 +126,19 @@ final class LogCapture: ObservableObject, @unchecked Sendable {
             self.pending.removeAll()
             self.flushScheduled = false
             self.lock.unlock()
+            self.writeToFile(batch)
             self.lines.append(contentsOf: batch)
             if self.lines.count > self.maxLines { self.lines.removeFirst(self.lines.count - self.maxLines) }
         }
     }
 
     var text: String { lines.joined(separator: "\n") }
+
+    private static let day: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
 
     private static let time: DateFormatter = {
         let f = DateFormatter()

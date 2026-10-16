@@ -35,6 +35,7 @@ struct EngineOptions: Equatable {
     var zeroCopy = true
     var lowMemory = false
     var useCPU = false
+    var verbose = false
 }
 
 struct SongRequest {
@@ -121,7 +122,8 @@ final class SongEngine: @unchecked Sendable {
                 if self.applied != options {
                     var o = ace_engine_options(zero_copy: options.zeroCopy ? 1 : 0,
                                                low_memory: options.lowMemory ? 1 : 0,
-                                               use_cpu: options.useCPU ? 1 : 0)
+                                               use_cpu: options.useCPU ? 1 : 0,
+                                               verbose: options.verbose ? 1 : 0)
                     ace_engine_set_options(handle, &o)
                     self.applied = options
                 }

@@ -154,10 +154,20 @@ struct HubClient {
     private func send(_ r: URLRequest) async throws -> Data {
         let data: Data
         let resp: URLResponse
+        let t0 = Date()
+        let label = "\(r.httpMethod ?? "GET") \(r.url?.path ?? "")"
         do {
             (data, resp) = try await Self.session.data(for: r)
         } catch {
+            LogCapture.shared.log("PC \(label) failed: \(error.localizedDescription)")
             throw HubError.unreachable(error.localizedDescription)
+        }
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        if !label.hasSuffix("/api/status") || code >= 400 {
+            LogCapture.shared.debug("PC \(label) → \(code) in \(Int(Date().timeIntervalSince(t0) * 1000)) ms, \(data.count) B")
+        }
+        if code >= 400 {
+            LogCapture.shared.log("PC \(label) → HTTP \(code): \(String(decoding: data.prefix(300), as: UTF8.self))")
         }
         try Self.check(data, resp)
         return data
