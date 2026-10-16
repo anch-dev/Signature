@@ -229,6 +229,33 @@ struct HubClient {
         try Self.check(data, resp)
     }
 
+    /// Uploads an audio file the PC should cover/remix; returns the Hub's reply (an id).
+    func upload<T: Decodable>(source file: URL, as: T.Type) async throws -> T {
+        let boundary = "sig-\(UUID().uuidString)"
+        var r = try request("/api/sources", method: "POST")
+        r.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        r.timeoutInterval = 60 * 10
+        let body = FileManager.default.temporaryDirectory.appendingPathComponent("src-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: body.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: body) }
+        let h = try FileHandle(forWritingTo: body)
+        let name = file.lastPathComponent.replacingOccurrences(of: "\"", with: "'")
+        h.write("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(name)\"\r\nContent-Type: application/octet-stream\r\n\r\n".data(using: .utf8)!)
+        let src = try FileHandle(forReadingFrom: file)
+        while let chunk = try src.read(upToCount: 1 << 20), !chunk.isEmpty { h.write(chunk) }
+        try src.close()
+        h.write("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+        try h.close()
+        let (data, resp): (Data, URLResponse)
+        do {
+            (data, resp) = try await Self.session.upload(for: r, fromFile: body)
+        } catch {
+            throw HubError.unreachable(error.localizedDescription)
+        }
+        try Self.check(data, resp)
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
     /// Unauthenticated check used while pairing.
     static func ping(_ base: URL) async throws -> String {
         var r = URLRequest(url: base.appendingPathComponent("api/ping"))

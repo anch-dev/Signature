@@ -27,6 +27,7 @@ struct SignatureApp: App {
     @State private var tab = 0
 
     init() {
+        LogCapture.shared.start()
         try? AVAudioSession.sharedInstance().setCategory(.playback)
         let bar = UITabBarAppearance()
         bar.configureWithOpaqueBackground()
@@ -70,6 +71,12 @@ struct SignatureApp: App {
             .onChange(of: generator.lastSong?.id) { _ in
                 // New song: start playing it right away, like Suno.
                 if let s = generator.lastSong { player.play(s, library: library) }
+            }
+            .onChange(of: generator.showCreate) { show in
+                if show {
+                    tab = 0
+                    generator.showCreate = false
+                }
             }
             .onOpenURL { url in
                 if url.scheme == "signature" {

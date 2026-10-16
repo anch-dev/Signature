@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -11,6 +12,8 @@ struct CreateView: View {
     @State private var showModels = false
     @State private var showOptions = false
     @State private var importing = false
+    @State private var pickingSource = false
+    @State private var pickingFromLibrary = false
     @FocusState private var focused: Bool
 
     static let genres = ["pop", "hip hop", "trap", "r&b", "rock", "indie", "edm", "house", "lo-fi", "drill",
@@ -34,7 +37,11 @@ struct CreateView: View {
                     PillPicker(options: CreateMode.allCases, selection: $gen.mode) { $0.title }
                     if !onPC && !models.isReady { downloadCard }
                     if onPC { pcStatus }
-                    if gen.mode == .simple { simpleForm } else { customForm }
+                    switch gen.mode {
+                    case .simple: simpleForm
+                    case .custom: customForm
+                    case .cover: coverForm
+                    }
                     soundRow
                     optionsCard
                     if let e = gen.error {
@@ -57,6 +64,10 @@ struct CreateView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showModels) { ModelPickerSheet() }
+            .sheet(isPresented: $pickingFromLibrary) { LibraryPicker() }
+            .fileImporter(isPresented: $pickingSource, allowedContentTypes: [.audio]) { r in
+                if case .success(let url) = r { importSource(url) }
+            }
             .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "safetensors") ?? .data, .data]) { r in
                 if case .success(let url) = r, let added = adapters.importFile(url) { gen.adapter = added }
             }
@@ -79,6 +90,15 @@ struct CreateView: View {
         HStack(alignment: .center) {
             Text("Create").font(.largeTitle.bold()).foregroundStyle(Theme.text)
             Spacer()
+            NavigationLink { TerminalView() } label: {
+                Image(systemName: "terminal")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(9)
+                    .background(Circle().fill(Theme.card))
+                    .overlay(Circle().stroke(Theme.stroke))
+                    .foregroundStyle(gen.running ? Theme.accent : Theme.text)
+            }
+            .accessibilityLabel("Status terminal")
             Button { showModels = true } label: {
                 HStack(spacing: 6) {
                     Image(systemName: onPC ? "desktopcomputer" : "iphone")
@@ -234,6 +254,110 @@ struct CreateView: View {
         }
     }
 
+    // MARK: Cover
+
+    private var coverForm: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("Source song")
+                HStack(spacing: 12) {
+                    SongArt(seed: gen.coverSourceName.isEmpty ? "none" : gen.coverSourceName, size: 48)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(gen.coverSource == nil ? "Pick a song to cover" : gen.coverSourceName)
+                            .font(.body.weight(.semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                        if gen.coverSource != nil {
+                            Text(Self.time(gen.coverSourceDuration)).font(.caption).foregroundStyle(Theme.muted)
+                        } else {
+                            Text("From your Library or any audio file").font(.caption).foregroundStyle(Theme.muted)
+                        }
+                    }
+                    Spacer()
+                    Menu {
+                        Button { pickingFromLibrary = true } label: { Label("From Library", systemImage: "music.note.list") }
+                        Button { pickingSource = true } label: { Label("From Files", systemImage: "folder") }
+                    } label: {
+                        Text(gen.coverSource == nil ? "Choose" : "Change").font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 12).padding(.vertical, 7)
+                            .background(Capsule().fill(Color.white)).foregroundStyle(.black)
+                    }
+                }
+                .card(padding: 12)
+                Text("Only cover music you own or have permission to use.").font(.caption2).foregroundStyle(Theme.faint)
+            }
+            PillPicker(options: CoverTask.allCases, selection: $gen.coverTask) { $0.title }
+            if gen.coverTask == .cover {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Keep from original").font(.subheadline).foregroundStyle(Theme.muted)
+                        Spacer()
+                        Text("\(Int(gen.coverStrength * 100))%").font(.caption.monospacedDigit()).foregroundStyle(Theme.muted)
+                    }
+                    Slider(value: $gen.coverStrength, in: 0.1...1.0, step: 0.05).tint(Theme.accent)
+                    Text("Lower = freer remix, higher = same song in a new style.").font(.caption2).foregroundStyle(Theme.faint)
+                }
+                .card()
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Section to redo").font(.subheadline).foregroundStyle(Theme.muted)
+                        Spacer()
+                        Text("\(Self.time(gen.repaintStart)) – \(Self.time(gen.repaintEnd))")
+                            .font(.caption.monospacedDigit()).foregroundStyle(Theme.muted)
+                    }
+                    let maxT = max(gen.coverSourceDuration, 10)
+                    Slider(value: $gen.repaintStart, in: 0...maxT, step: 1).tint(Theme.accent)
+                        .onChange(of: gen.repaintStart) { v in if gen.repaintEnd < v + 2 { gen.repaintEnd = min(maxT, v + 2) } }
+                    Slider(value: $gen.repaintEnd, in: 0...maxT, step: 1).tint(Theme.accent)
+                        .onChange(of: gen.repaintEnd) { v in if gen.repaintStart > v - 2 { gen.repaintStart = max(0, v - 2) } }
+                    Text("Everything outside this range stays the same.").font(.caption2).foregroundStyle(Theme.faint)
+                }
+                .card()
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("New style")
+                TextField("", text: $gen.style, prompt: Text("acoustic guitar, soft female vocal, lo-fi").foregroundColor(Theme.faint), axis: .vertical)
+                    .focused($focused)
+                    .lineLimit(1...4)
+                    .foregroundStyle(Theme.text)
+                    .card(padding: 12)
+                tagRow(Self.genres + Self.vibes, into: $gen.style)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("Lyrics", trailing: AnyView(
+                    Chip(title: "Instrumental", icon: gen.instrumental ? "checkmark" : nil, selected: gen.instrumental) {
+                        gen.instrumental.toggle()
+                    }))
+                if !gen.instrumental {
+                    TextEditor(text: $gen.lyrics)
+                        .focused($focused)
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 140)
+                        .font(.body.monospaced())
+                        .foregroundStyle(Theme.text)
+                        .card(padding: 10)
+                    Text("Keep the original lyrics for a cover, or change them for new words over the same music.")
+                        .font(.caption2).foregroundStyle(Theme.faint)
+                }
+            }
+        }
+    }
+
+    private func importSource(_ url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let dir = library.songsDir.deletingLastPathComponent().appendingPathComponent("Sources", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appendingPathComponent(url.lastPathComponent)
+        try? FileManager.default.removeItem(at: dest)
+        do {
+            try FileManager.default.copyItem(at: url, to: dest)
+            let secs = (try? AVAudioPlayer(contentsOf: dest).duration) ?? 0
+            gen.prepareCover(source: dest, name: url.deletingPathExtension().lastPathComponent, duration: secs)
+        } catch {
+            gen.error = "Couldn't open that file: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: Your sound (styles)
 
     private var styleNames: [String] {
@@ -310,13 +434,13 @@ struct CreateView: View {
             }
             .buttonStyle(.plain)
             if showOptions {
-                VStack(alignment: .leading, spacing: 4) {
+                if gen.mode != .cover { VStack(alignment: .leading, spacing: 4) {
                     Text("Length").font(.caption).foregroundStyle(Theme.muted)
                     Slider(value: $gen.duration, in: 10...max(limit, 20), step: 5).tint(Theme.accent)
                     if !onPC && models.liteActive {
                         Text("Lite mode: up to \(Self.time(limit)) on this iPhone.").font(.caption2).foregroundStyle(Theme.faint)
                     }
-                }
+                } }
                 Picker("Vocal language", selection: $gen.language) {
                     ForEach(languages, id: \.0) { Text($0.1).tag($0.0) }
                 }
@@ -347,5 +471,31 @@ struct CreateView: View {
 
     static func time(_ s: Double) -> String {
         String(format: "%d:%02d", Int(s) / 60, Int(s) % 60)
+    }
+}
+
+/// Pick a Library song as the source of a cover.
+struct LibraryPicker: View {
+    @EnvironmentObject var library: Library
+    @EnvironmentObject var gen: Generator
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List(library.songs) { s in
+                Button {
+                    gen.prepareCover(source: library.url(for: s), name: s.title, duration: s.duration,
+                                     caption: s.caption, lyrics: s.lyrics)
+                    dismiss()
+                } label: { SongRow(song: s, playing: false) }
+                .listRowBackground(Theme.bg)
+            }
+            .listStyle(.plain)
+            .screen()
+            .navigationTitle("Cover a song")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Cancel") { dismiss() } }
+        }
+        .preferredColorScheme(.dark)
     }
 }

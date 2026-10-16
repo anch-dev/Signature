@@ -28,6 +28,11 @@ class GenJob:
     seed: int = -1
     bpm: int = 0
     simple: bool = False            # description only: ACE-Step's songwriter writes lyrics + style
+    source: Optional[str] = None    # path of uploaded source audio (cover / repaint)
+    task: str = "new"               # new | cover | repaint
+    cover_strength: float = 0.7
+    repaint_start: float = 0.0
+    repaint_end: float = -1.0
     status: str = "queued"          # queued | starting | running | done | failed
     message: str = ""
     created: float = field(default_factory=time.time)
@@ -143,6 +148,16 @@ class Generator:
                 "audio_format": "mp3",
                 "inference_steps": 8,
             }
+            if job.source and job.task in ("cover", "repaint"):
+                body["task_type"] = job.task
+                body["src_audio_path"] = job.source
+                body["thinking"] = False          # covers follow the source's structure
+                body.pop("audio_duration", None)  # length comes from the source
+                if job.task == "cover":
+                    body["audio_cover_strength"] = max(0.0, min(1.0, job.cover_strength))
+                else:
+                    body["repainting_start"] = max(0.0, job.repaint_start)
+                    body["repainting_end"] = job.repaint_end
             if job.simple:
                 body["sample_mode"] = True
                 body["sample_query"] = job.caption

@@ -284,6 +284,7 @@ struct SettingsView: View {
                 }
 
                 Section {
+                    NavigationLink { TerminalView() } label: { Label("Status terminal", systemImage: "terminal") }
                     LabeledContent("Memory for Signature", value: String(format: "%.1f GB", Device.budgetGB))
                     LabeledContent("Longest song", value: CreateView.time(models.maxDuration))
                     if models.lastPeaks.count == 4 {

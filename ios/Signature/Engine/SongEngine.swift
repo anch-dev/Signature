@@ -46,6 +46,13 @@ struct SongRequest {
     var seed: Int64           // -1 = random
     var adapter: URL?
     var adapterScale: Float
+    // Cover / repaint
+    var source: URL? = nil
+    var task: Int32 = 0          // 0 new, 1 cover, 2 repaint
+    var coverStrength: Float = 1
+    var coverNoise: Float = 0
+    var repaintStart: Float = 0
+    var repaintEnd: Float = -1
 }
 
 struct SongResult {
@@ -156,7 +163,13 @@ final class SongEngine: @unchecked Sendable {
                     duration: Float(request.duration),
                     bpm: Int32(request.bpm),
                     seed: request.seed,
-                    inference_steps: 0
+                    inference_steps: 0,
+                    src_audio_path: c(request.source?.path),
+                    task: request.task,
+                    cover_strength: request.coverStrength,
+                    cover_noise: request.coverNoise,
+                    repaint_start: request.repaintStart,
+                    repaint_end: request.repaintEnd
                 )
                 // ace_song_info is large (lyrics buffer); keep it on the heap.
                 let info = UnsafeMutablePointer<ace_song_info>.allocate(capacity: 1)

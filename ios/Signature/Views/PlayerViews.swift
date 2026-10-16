@@ -158,10 +158,20 @@ struct NowPlayingView: View {
                             gen.reuse(s)
                             dismiss()
                         } label: {
-                            Label("Reuse prompt", systemImage: "arrow.uturn.left").frame(maxWidth: .infinity)
+                            Label("Reuse", systemImage: "arrow.uturn.left").frame(maxWidth: .infinity)
                         }
                     }
                     .buttonStyle(.bordered).tint(.white)
+                    Button {
+                        gen.prepareCover(source: library.url(for: s), name: s.title, duration: s.duration,
+                                         caption: s.caption, lyrics: s.lyrics)
+                        dismiss()
+                    } label: {
+                        Label("Cover / Remix this song", systemImage: "wand.and.stars").font(.headline)
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .background(Capsule().fill(Theme.gradient)).foregroundStyle(.white)
+                    }
+                    .buttonStyle(.plain)
                     details(s)
                     if s.lyrics != "[Instrumental]", !s.lyrics.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
@@ -232,6 +242,10 @@ struct LibraryView: View {
                                 .contextMenu {
                                     ShareLink(item: library.url(for: s)) { Label("Share", systemImage: "square.and.arrow.up") }
                                     Button { gen.reuse(s) } label: { Label("Reuse prompt", systemImage: "arrow.uturn.left") }
+                                    Button {
+                                        gen.prepareCover(source: library.url(for: s), name: s.title, duration: s.duration,
+                                                         caption: s.caption, lyrics: s.lyrics)
+                                    } label: { Label("Cover / Remix", systemImage: "wand.and.stars") }
                                     Button {
                                         gen.lockSeed = true
                                         gen.seedText = String(s.seed)

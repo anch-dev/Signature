@@ -23,6 +23,7 @@ DATASETS = DATA / "datasets"
 ADAPTERS = DATA / "adapters"
 WORK = DATA / "work"
 SONGS = DATA / "songs"
+SOURCES = DATA / "sources"   # audio uploaded from phones for covers / repaint
 SETTINGS_FILE = DATA / "hub.json"
 
 PREP_SCRIPT = Path(__file__).with_name("prep_dataset.py")
@@ -57,7 +58,7 @@ class Settings:
 
     @classmethod
     def load(cls) -> "Settings":
-        for d in (DATASETS, ADAPTERS, WORK, SONGS):
+        for d in (DATASETS, ADAPTERS, WORK, SONGS, SOURCES):
             d.mkdir(parents=True, exist_ok=True)
         if SETTINGS_FILE.exists():
             try:

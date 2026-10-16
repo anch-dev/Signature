@@ -7,9 +7,21 @@ enum GenTarget: String, CaseIterable, Identifiable {
 }
 
 enum CreateMode: String, CaseIterable, Identifiable {
-    case simple, custom
+    case simple, custom, cover
     var id: String { rawValue }
-    var title: String { self == .simple ? "Simple" : "Custom" }
+    var title: String {
+        switch self {
+        case .simple: return "Simple"
+        case .custom: return "Custom"
+        case .cover: return "Cover"
+        }
+    }
+}
+
+enum CoverTask: String, CaseIterable, Identifiable {
+    case cover, repaint
+    var id: String { rawValue }
+    var title: String { self == .cover ? "Cover / Remix" : "Repaint section" }
 }
 
 @MainActor
@@ -32,6 +44,17 @@ final class Generator: ObservableObject {
     @Published var adapterScale: Double = 1.0
     @Published var lockSeed = false
     @Published var seedText = ""
+    // Cover / remix / repaint
+    @Published var coverSource: URL?
+    @Published var coverSourceName = ""
+    @Published var coverSourceDuration: Double = 0
+    @Published var coverTask: CoverTask = .cover
+    @Published var coverStrength: Double = 0.7     // how much of the original's structure to keep
+    @Published var repaintStart: Double = 0
+    @Published var repaintEnd: Double = 30
+    /// Set when another screen wants the Create tab shown (e.g. "Cover" from the player).
+    @Published var showCreate = false
+
     @Published var target: GenTarget = GenTarget(rawValue: UserDefaults.standard.string(forKey: "target") ?? "") ?? .phone {
         didSet { UserDefaults.standard.set(target.rawValue, forKey: "target") }
     }
@@ -70,6 +93,21 @@ final class Generator: ObservableObject {
             }
             let t = title.isEmpty ? Self.autoTitle(d) : title
             return Prepared(caption: trigger + d, lyrics: instrumental ? "[Instrumental]" : "", title: t)
+        case .cover:
+            guard coverSource != nil else {
+                error = "Pick a song to cover first."
+                return nil
+            }
+            let s = style.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !s.isEmpty else {
+                error = "Describe the new style, e.g. \"acoustic guitar, soft female vocal\"."
+                return nil
+            }
+            let words = lyrics.trimmingCharacters(in: .whitespacesAndNewlines)
+            let base = coverSourceName.isEmpty ? "Song" : coverSourceName
+            let t = title.isEmpty ? "\(base) (\(coverTask == .cover ? "Cover" : "Repaint"))" : title
+            return Prepared(caption: trigger.isEmpty || s.lowercased().contains(trigger.dropLast(2).lowercased()) ? s : trigger + s,
+                            lyrics: instrumental || words.isEmpty ? "[Instrumental]" : words, title: t)
         case .custom:
             let s = style.trimmingCharacters(in: .whitespacesAndNewlines)
             let words = lyrics.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -126,13 +164,19 @@ final class Generator: ObservableObject {
             caption: p.caption, lyrics: p.lyrics, language: language,
             duration: min(duration, models.maxDuration), bpm: 0,
             seed: lockSeed ? Int64(seedText) ?? -1 : -1,
-            adapter: adapter, adapterScale: Float(adapterScale))
+            adapter: adapter, adapterScale: Float(adapterScale),
+            source: mode == .cover ? coverSource : nil,
+            task: mode == .cover ? (coverTask == .cover ? 1 : 2) : 0,
+            coverStrength: Float(coverStrength), coverNoise: 0,
+            repaintStart: Float(repaintStart), repaintEnd: Float(repaintEnd))
         let options = models.engineOptions
         let modelName = models.music.name
 
         let (out, fileName) = library.newFileURL(title: p.title)
-        begin(paths.songwriter != nil ? GenStage.songwriter.label : GenStage.diffusion.label)
-        stage = paths.songwriter != nil ? .songwriter : .diffusion
+        let usesWriter = paths.songwriter != nil && mode != .cover
+        begin(usesWriter ? GenStage.songwriter.label : GenStage.diffusion.label)
+        stage = usesWriter ? .songwriter : .diffusion
+        LogCapture.shared.log("Start: \(modelName), \(mode.title), \(Int(request.duration))s, \(options.useCPU ? "CPU" : "GPU")\(options.lowMemory ? ", Lite" : "")")
         UIApplication.shared.isIdleTimerDisabled = true  // screen lock suspends GPU work
 
         let flag = cancelFlag
@@ -161,12 +205,14 @@ final class Generator: ObservableObject {
                     adapter: styleName, seed: result.seed, bpm: result.bpm,
                     key: result.key, duration: result.duration, created: Date(), fileName: fileName,
                     madeOn: "iPhone", model: modelName, prompt: mode == .simple ? songDescription : style)
+                LogCapture.shared.log("Done: \(p.title), peak \(ByteCountFormatter.string(fromByteCount: Int64(result.peakBytes.max() ?? 0), countStyle: .memory))")
                 library.add(song)
                 lastSong = song
                 seedText = String(result.seed)
             } catch {
                 try? FileManager.default.removeItem(at: out)
                 self.error = error.localizedDescription
+                LogCapture.shared.log("Failed: \(error.localizedDescription)")
             }
         }
     }
@@ -183,16 +229,27 @@ final class Generator: ObservableObject {
         struct Body: Encodable {
             let caption: String; let lyrics: String; let duration: Double; let language: String
             let style: String?; let style_scale: Double; let seed: Int64; let simple: Bool
+            var source: String?; let task: String; let cover_strength: Double
+            let repaint_start: Double; let repaint_end: Double
         }
         let body = Body(caption: p.caption, lyrics: p.lyrics, duration: min(duration, 480), language: language,
                         style: pcStyle, style_scale: adapterScale, seed: lockSeed ? Int64(seedText) ?? -1 : -1,
-                        simple: mode == .simple && !instrumental)
+                        simple: mode == .simple && !instrumental, source: nil,
+                        task: mode == .cover ? coverTask.rawValue : "new", cover_strength: coverStrength,
+                        repaint_start: repaintStart, repaint_end: repaintEnd)
+        let source = mode == .cover ? coverSource : nil
         begin("Sending to \(pcName)")
 
         remoteTask = Task {
             defer { end() }
             do {
-                var job = try await client.call("POST", "/api/generate", body: body, as: RemoteJob.self)
+                var request = body
+                if let source {
+                    statusText = "Uploading source"
+                    struct Uploaded: Decodable { let id: String }
+                    request.source = try await client.upload(source: source, as: Uploaded.self).id
+                }
+                var job = try await client.call("POST", "/api/generate", body: request, as: RemoteJob.self)
                 while job.status != "done" && job.status != "failed" {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
                     if cancelFlag.get() { return }
@@ -270,6 +327,21 @@ final class Generator: ObservableObject {
     func cancel() {
         cancelFlag.set(true)
         remoteTask?.cancel()
+    }
+
+    /// Start a cover / remix of a Library song or an audio file.
+    func prepareCover(source: URL, name: String, duration: Double, caption: String? = nil, lyrics songLyrics: String? = nil) {
+        mode = .cover
+        coverSource = source
+        coverSourceName = name
+        coverSourceDuration = duration
+        repaintStart = 0
+        repaintEnd = min(duration, 30)
+        if let l = songLyrics, l != "[Instrumental]" { lyrics = l; instrumental = false }
+        if songLyrics == "[Instrumental]" { instrumental = true }
+        if style.isEmpty, let c = caption { style = c }
+        title = ""
+        showCreate = true
     }
 
     /// Load a song's settings back into the form ("Reuse prompt").

@@ -61,10 +61,10 @@ jobs:
             echo "::error file=ios/$f,line=$l::$msg"
           done || true
           # Linker and other non-file errors.
-          grep -E "(^ld: |Undefined symbol|^error: |clang: error|: fatal error|\(in target)" build/xcodebuild.log \
+          grep -E "(^ld: |Undefined symbol|^error: |clang: error|: fatal error)" build/xcodebuild.log \
             | sort -u | head -30 | while IFS= read -r line; do echo "::error::${line:0:400}"; done || true
           if ! grep -q "BUILD SUCCEEDED" build/xcodebuild.log; then
-            grep -nE "error|failed|FAILED" build/xcodebuild.log | grep -v "warning" | tail -25 \
+            grep -nE " error: |BUILD FAILED|failed with exit code" build/xcodebuild.log | tail -25 \
               | while IFS= read -r line; do echo "::error::${line:0:400}"; done || true
             tail -15 build/xcodebuild.log | while IFS= read -r line; do echo "::error::tail: ${line:0:400}"; done
           fi

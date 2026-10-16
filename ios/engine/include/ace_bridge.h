@@ -49,7 +49,21 @@ typedef struct {
     int          bpm;              // 0 = let the songwriter decide
     int64_t      seed;             // -1 = random
     int          inference_steps;  // 0 = model default (turbo 8, sft/base 50)
+
+    // Cover / remix / repaint (source audio: wav or mp3, any sample rate)
+    const char * src_audio_path;   // NULL = make a new song (text2music)
+    int          task;             // ACE_TASK_*
+    float        cover_strength;   // cover: 0..1, how much of the original's structure to keep (default 1)
+    float        cover_noise;      // cover: 0..1, 0 = fresh take, 1 = stay very close to the source (default 0)
+    float        repaint_start;    // repaint: seconds
+    float        repaint_end;      // repaint: seconds, -1 = to the end
 } ace_song_request;
+
+enum {
+    ACE_TASK_NEW     = 0,  // text2music
+    ACE_TASK_COVER   = 1,  // same song, new style / lyrics
+    ACE_TASK_REPAINT = 2,  // regenerate one section, keep the rest
+};
 
 typedef struct {
     int64_t  seed_used;

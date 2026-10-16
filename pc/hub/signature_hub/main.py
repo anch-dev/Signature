@@ -199,6 +199,30 @@ class GenBody(BaseModel):
     seed: int = -1
     bpm: int = 0
     simple: bool = False
+    source: Optional[str] = None
+    task: str = "new"
+    cover_strength: float = Field(default=0.7, ge=0, le=1)
+    repaint_start: float = 0.0
+    repaint_end: float = -1.0
+
+
+@app.post("/api/sources", dependencies=[Depends(auth)])
+async def upload_source(file: UploadFile = File(...)):
+    """Audio a phone wants covered / repainted. Returns an id for /api/generate."""
+    import re as _re
+    import shutil as _shutil
+    import uuid as _uuid
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in (".wav", ".mp3", ".flac", ".m4a", ".ogg", ".opus"):
+        raise HTTPException(400, "Send WAV, MP3, FLAC, M4A, OGG or Opus audio")
+    sid = _uuid.uuid4().hex[:16] + ext
+    dest = config.SOURCES / sid
+    with dest.open("wb") as out:
+        await asyncio.to_thread(_shutil.copyfileobj, file.file, out, 1024 * 1024)
+    # keep the 30 most recent uploads
+    for old in sorted(config.SOURCES.iterdir(), key=lambda p: p.stat().st_mtime)[:-30]:
+        old.unlink(missing_ok=True)
+    return {"id": sid}
 
 
 @app.post("/api/generate", dependencies=[Depends(auth)])
@@ -209,8 +233,21 @@ async def generate(body: GenBody):
         datasets.check_name(body.style)
     job = gen.submit(caption=body.caption, lyrics=body.lyrics, duration=body.duration, language=body.language,
                      adapter=body.style, adapter_scale=body.style_scale, seed=body.seed, bpm=body.bpm,
-                     simple=body.simple)
+                     simple=body.simple, task=body.task if body.task in ("new", "cover", "repaint") else "new",
+                     source=_source_path(body.source), cover_strength=body.cover_strength,
+                     repaint_start=body.repaint_start, repaint_end=body.repaint_end)
     return job.public()
+
+
+def _source_path(sid: Optional[str]) -> Optional[str]:
+    if not sid:
+        return None
+    if "/" in sid or "\\" in sid or sid.startswith("."):
+        raise HTTPException(400, "Bad source id")
+    p = config.SOURCES / sid
+    if not p.exists():
+        raise HTTPException(404, "Source audio expired; upload it again")
+    return str(p.resolve())
 
 
 @app.get("/api/jobs", dependencies=[Depends(auth)])

@@ -167,9 +167,37 @@ int ace_engine_generate(ace_engine *             e,
     }
     std::lock_guard<std::mutex> lock(e->busy);
     const bool  low  = e->opts.low_memory != 0;
-    const bool  lm   = !empty(m->lm_path);
     const float maxd = low ? 120.0f : 240.0f;
-    const float duration = std::clamp(r->duration > 0 ? r->duration : 60.0f, 10.0f, maxd);
+    const int   task = empty(r->src_audio_path) ? ACE_TASK_NEW : r->task;
+
+    // Source audio for cover / repaint, decoded and resampled to 48 kHz stereo.
+    std::vector<float> src;  // interleaved
+    int                src_len = 0;
+    if (task != ACE_TASK_NEW) {
+        int     T      = 0;
+        float * planar = audio_read_48k(r->src_audio_path, &T);
+        if (!planar || T <= 0) {
+            free(planar);
+            set_err(err, err_len, "could not read the source audio (use WAV or MP3)");
+            return -1;
+        }
+        // Planar layout: left channel [0, T), right channel [T, 2T). Keep at most maxd seconds.
+        const int full = T;
+        const int keep = std::min(T, (int) (maxd * 48000.0f));
+        src.resize((size_t) keep * 2);
+        for (int i = 0; i < keep; i++) {
+            src[(size_t) i * 2]     = planar[i];
+            src[(size_t) i * 2 + 1] = planar[(size_t) full + (size_t) i];
+        }
+        T = keep;
+        free(planar);
+        src_len = T;
+    }
+    // Covers follow the source's structure, so the songwriter's code plan is skipped.
+    const bool  lm       = !empty(m->lm_path) && task == ACE_TASK_NEW;
+    const float src_secs = (float) src_len / 48000.0f;
+    const float duration = task != ACE_TASK_NEW ? std::clamp(src_secs, 1.0f, maxd)
+                                                : std::clamp(r->duration > 0 ? r->duration : 60.0f, 10.0f, maxd);
 
     Peaks peaks;
 
@@ -185,7 +213,17 @@ int ace_engine_generate(ace_engine *             e,
     }
     req.seed            = r->seed;
     req.inference_steps = r->inference_steps > 0 ? r->inference_steps : 0;
-    req.task_type       = TASK_TEXT2MUSIC;
+    req.task_type       = task == ACE_TASK_COVER ? TASK_COVER : task == ACE_TASK_REPAINT ? TASK_REPAINT : TASK_TEXT2MUSIC;
+    if (task == ACE_TASK_COVER) {
+        req.audio_cover_strength = r->cover_strength > 0 ? std::min(r->cover_strength, 1.0f) : 1.0f;
+        req.cover_noise_strength = std::clamp(r->cover_noise, 0.0f, 1.0f);
+    } else if (task == ACE_TASK_REPAINT) {
+        req.repainting_start = std::max(0.0f, r->repaint_start);
+        req.repainting_end   = r->repaint_end;
+    }
+    if (task != ACE_TASK_NEW && req.lyrics.empty()) {
+        req.lyrics = "[Instrumental]";
+    }
     req.lm_mode         = LM_MODE_NAME_GENERATE;
     request_resolve_seed(&req);
     request_resolve_lm_seed(&req);
@@ -268,8 +306,8 @@ int ace_engine_generate(ace_engine *             e,
     Tick      dt{ progress, user, ACE_STAGE_DIFFUSION, (float) steps, &peaks };
     report(progress, user, ACE_STAGE_DIFFUSION, 0.0f, &cancelled, &peaks);
     AceSynthJob * job = cancelled ? nullptr
-                                  : ace_synth_job_run_dit(synth, &planned, nullptr, 0, nullptr, 0, nullptr, 0,
-                                                          nullptr, 0, 1, tick_cb, &dt);
+                                  : ace_synth_job_run_dit(synth, &planned, src.empty() ? nullptr : src.data(), src_len,
+                                                          nullptr, 0, nullptr, 0, nullptr, 0, 1, tick_cb, &dt);
     peaks.sample(ACE_STAGE_DIFFUSION);
     if (!job) {
         ace_synth_free(synth);
