@@ -27,6 +27,7 @@ class GenJob:
     adapter_scale: float = 1.0
     seed: int = -1
     bpm: int = 0
+    enhance: bool = True            # songwriter adds detail to the caption (user words kept first)
     simple: bool = False            # description only: ACE-Step's songwriter writes lyrics + style
     source: Optional[str] = None    # path of uploaded source audio (cover / repaint)
     task: str = "new"               # new | cover | repaint
@@ -50,6 +51,29 @@ class GenJob:
 
 class AceStepError(RuntimeError):
     pass
+
+
+# ---- prompt enhancement: add to the user's words, never replace them ----
+_STOP = {"the", "and", "with", "song", "music", "about", "for", "that", "this", "track",
+         "from", "into", "very", "some", "style", "like", "feat", "vibe", "sound"}
+
+
+def _keywords(text: str) -> list[str]:
+    import re
+    return [w for w in re.findall(r"[a-z0-9&]+", text.lower()) if len(w) >= 3 and w not in _STOP]
+
+
+def merge_caption(user: str, enhanced: str) -> str:
+    """Keep the user's prompt first; append the songwriter's detail only if it stays on topic."""
+    u, en = user.strip(), (enhanced or "").strip()
+    if not en or en.lower() == u.lower():
+        return u
+    keys = _keywords(u)
+    if keys and not any(k in en.lower() for k in keys):
+        return u   # drifted off topic (e.g. "hip hop" -> vibraphone loop)
+    if en.lower().startswith(u.lower()):
+        return en[:900]
+    return (u.rstrip(" .,") + ". " + en)[:900]
 
 
 class Generator:
@@ -139,9 +163,20 @@ class Generator:
             job.message = "Loading style" if job.adapter else "Preparing"
             await self._apply_adapter(client, job.adapter, job.adapter_scale)
 
+            caption, lyrics = job.caption, job.lyrics
+            if job.enhance and not job.simple and job.task == "new" and caption:
+                job.message = "Enhancing your prompt"
+                try:
+                    f = self._unwrap(await client.post("/format_input", json={"prompt": caption, "lyrics": lyrics or ""}))
+                    caption = merge_caption(caption, (f or {}).get("caption", ""))
+                    if not lyrics and (f or {}).get("lyrics"):
+                        lyrics = f["lyrics"]
+                except Exception:
+                    pass   # enhancement is optional; use the prompt as typed
+                job.meta["caption"] = caption
             body = {
-                "prompt": job.caption,
-                "lyrics": job.lyrics if job.simple else (job.lyrics or "[Instrumental]"),
+                "prompt": caption,
+                "lyrics": lyrics if job.simple else (lyrics or "[Instrumental]"),
                 "audio_duration": job.duration,
                 "thinking": True,            # songwriter LM plans structure -> better vocals
                 "use_cot_caption": False,    # keep the user's style prompt exactly as typed
@@ -213,7 +248,8 @@ class Generator:
                 "duration": float(metas.get("duration") or job.duration),
                 "seed": _int(seed, -1),
                 "model": item.get("dit_model") or config.DIT_MODEL,
-                "lyrics": item.get("lyrics") or job.lyrics,
+                "lyrics": item.get("lyrics") or lyrics,
+                "caption": caption,
             }
             job.file = str(out)
             job.status = "done"

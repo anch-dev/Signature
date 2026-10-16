@@ -50,6 +50,7 @@ typedef struct {
     int          bpm;              // 0 = let the songwriter decide
     int64_t      seed;             // -1 = random
     int          inference_steps;  // 0 = model default (turbo 8, sft/base 50)
+    int          enhance_prompt;   // 1 = songwriter adds detail to the caption (your words always kept, first)
 
     // Cover / remix / repaint (source audio: wav or mp3, any sample rate)
     const char * src_audio_path;   // NULL = make a new song (text2music)

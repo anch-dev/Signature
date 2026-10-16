@@ -47,6 +47,7 @@ struct SongRequest {
     var seed: Int64           // -1 = random
     var adapter: URL?
     var adapterScale: Float
+    var enhancePrompt = true
     // Cover / repaint
     var source: URL? = nil
     var task: Int32 = 0          // 0 new, 1 cover, 2 repaint
@@ -166,6 +167,7 @@ final class SongEngine: @unchecked Sendable {
                     bpm: Int32(request.bpm),
                     seed: request.seed,
                     inference_steps: 0,
+                    enhance_prompt: request.enhancePrompt ? 1 : 0,
                     src_audio_path: c(request.source?.path),
                     task: request.task,
                     cover_strength: request.coverStrength,

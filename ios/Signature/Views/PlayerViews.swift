@@ -177,6 +177,7 @@ struct NowPlayingView: View {
                             .background(Capsule().fill(Theme.gradient)).foregroundStyle(.white)
                     }
                     .buttonStyle(.plain)
+                    promptCard(s)
                     details(s)
                     if s.lyrics != "[Instrumental]", !s.lyrics.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
@@ -192,6 +193,32 @@ struct NowPlayingView: View {
             .screen()
             .presentationDragIndicator(.hidden)
         }
+    }
+
+    @ViewBuilder private func promptCard(_ s: Song) -> some View {
+        let typed = (s.prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !typed.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("Your prompt")
+                Text(typed).foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
+                let added = Self.addition(typed: typed, used: s.caption)
+                if !added.isEmpty {
+                    SectionLabel("Songwriter added")
+                    Text(added).font(.callout).foregroundStyle(Theme.muted).frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .card()
+        }
+    }
+
+    /// The part of the final caption that came from the songwriter.
+    static func addition(typed: String, used: String) -> String {
+        let u = used.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !u.isEmpty, u.lowercased() != typed.lowercased() else { return "" }
+        if let r = u.range(of: typed, options: [.caseInsensitive, .anchored]) {
+            return u[r.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: ".,; ").union(.whitespaces))
+        }
+        return u
     }
 
     private func details(_ s: Song) -> some View {

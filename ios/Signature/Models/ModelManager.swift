@@ -102,10 +102,14 @@ final class ModelManager: ObservableObject {
     func path(_ f: ModelFile) -> URL { directory.appendingPathComponent(f.id) }
     func isInstalled(_ f: ModelFile) -> Bool { installed.contains(f.id) }
 
-    var paths: ModelPaths? {
+    var paths: ModelPaths? { paths(forceSongwriter: false) }
+
+    /// Simple mode always needs the songwriter, even if it's toggled off for Custom.
+    func paths(forceSongwriter: Bool) -> ModelPaths? {
         guard isReady, let m = musicFile else { return nil }
+        let writer = (useSongwriter || forceSongwriter) ? songwriterFile.flatMap { isInstalled($0) ? path($0) : nil } : nil
         return ModelPaths(
-            songwriter: useSongwriter ? songwriterFile.map(path) : nil,
+            songwriter: writer,
             textEncoder: path(textEncoderFile),
             diffusion: path(m),
             vae: path(Catalog.vae))

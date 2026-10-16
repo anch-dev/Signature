@@ -55,6 +55,11 @@ final class Generator: ObservableObject {
     /// Set when another screen wants the Create tab shown (e.g. "Cover" from the player).
     @Published var showCreate = false
 
+    /// Songwriter adds detail to the style prompt (your words stay first; off-topic additions are dropped).
+    @Published var enhancePrompt: Bool = UserDefaults.standard.object(forKey: "enhancePrompt") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(enhancePrompt, forKey: "enhancePrompt") }
+    }
+
     @Published var target: GenTarget = GenTarget(rawValue: UserDefaults.standard.string(forKey: "target") ?? "") ?? .phone {
         didSet { UserDefaults.standard.set(target.rawValue, forKey: "target") }
     }
@@ -199,7 +204,7 @@ final class Generator: ObservableObject {
 
     func start(models: ModelManager, library: Library) {
         guard !running else { return }
-        guard let paths = models.paths else {
+        guard let paths = models.paths(forceSongwriter: mode == .simple) else {
             error = "Download the models first."
             return
         }
@@ -213,6 +218,8 @@ final class Generator: ObservableObject {
             task: mode == .cover ? (coverTask == .cover ? 1 : 2) : 0,
             coverStrength: Float(coverStrength), coverNoise: 0,
             repaintStart: Float(repaintStart), repaintEnd: Float(repaintEnd))
+        var req = request
+        req.enhancePrompt = enhancePrompt && mode != .cover
         let options = models.engineOptions
         let modelName = models.music.name
 
@@ -233,7 +240,7 @@ final class Generator: ObservableObject {
             defer { end() }
             do {
                 let result = try await SongEngine.shared.generate(
-                    request, models: paths, options: options, output: out,
+                    req, models: paths, options: options, output: out,
                     onProgress: { [weak self] s, value in
                         Task { @MainActor in
                             guard let self else { return }
@@ -280,13 +287,13 @@ final class Generator: ObservableObject {
         guard let p = prepare(songwriterAvailable: true) else { return }
         struct Body: Encodable {
             let caption: String; let lyrics: String; let duration: Double; let language: String
-            let style: String?; let style_scale: Double; let seed: Int64; let simple: Bool
+            let style: String?; let style_scale: Double; let seed: Int64; let simple: Bool; let enhance: Bool
             var source: String?; let task: String; let cover_strength: Double
             let repaint_start: Double; let repaint_end: Double
         }
         let body = Body(caption: p.caption, lyrics: p.lyrics, duration: min(duration, 480), language: language,
                         style: pcStyle, style_scale: adapterScale, seed: lockSeed ? Int64(seedText) ?? -1 : -1,
-                        simple: mode == .simple && !instrumental, source: nil,
+                        simple: mode == .simple && !instrumental, enhance: enhancePrompt && mode != .cover, source: nil,
                         task: mode == .cover ? coverTask.rawValue : "new", cover_strength: coverStrength,
                         repaint_start: repaintStart, repaint_end: repaintEnd)
         let source = mode == .cover ? coverSource : nil

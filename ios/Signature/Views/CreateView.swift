@@ -179,12 +179,54 @@ struct CreateView: View {
             }
             .card(padding: 10)
             tagRow(Self.genres + Self.vibes, into: $gen.songDescription)
-            HStack {
-                Chip(title: "Instrumental", icon: gen.instrumental ? "checkmark" : "pianokeys", selected: gen.instrumental) {
-                    gen.instrumental.toggle()
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Chip(title: "Instrumental", icon: gen.instrumental ? "checkmark" : "pianokeys", selected: gen.instrumental) {
+                        gen.instrumental.toggle()
+                    }
+                    if !onPC {
+                        Chip(title: "Songwriter", icon: "lock.fill", selected: true) {}
+                            .allowsHitTesting(false)
+                    }
+                    enhanceChip
                 }
-                Spacer()
             }
+            if !onPC {
+                Text("Simple mode always uses the songwriter: it writes the lyrics from your description.")
+                    .font(.caption2).foregroundStyle(Theme.faint)
+            }
+        }
+    }
+
+    private var enhanceChip: some View {
+        Chip(title: "Enhance prompt", icon: gen.enhancePrompt ? "sparkles" : "sparkle", selected: gen.enhancePrompt) {
+            gen.enhancePrompt.toggle()
+        }
+    }
+
+    @ViewBuilder private var songwriterChips: some View {
+        if !onPC {
+            VStack(alignment: .leading, spacing: 6) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Chip(title: "Songwriter", icon: models.useSongwriter ? "checkmark" : "pencil.slash",
+                             selected: models.useSongwriter) {
+                            models.useSongwriter.toggle()
+                        }
+                        if models.useSongwriter { enhanceChip }
+                    }
+                }
+                Text(models.useSongwriter
+                     ? (gen.enhancePrompt ? "Songwriter plans structure and adds detail to your style. Your words always stay." : "Songwriter plans structure; your style is used exactly as typed.")
+                     : "Off = faster and lighter, but vocals may drift from the lyrics.")
+                    .font(.caption2).foregroundStyle(Theme.faint)
+                if models.useSongwriter, let f = models.songwriterFile, !models.isInstalled(f) {
+                    Button("Download \(models.songwriter.name) (\(ModelManager.format(f.bytes)))") { models.download(f) }
+                        .font(.caption.weight(.semibold)).tint(Theme.accent)
+                }
+            }
+        } else {
+            HStack { enhanceChip; Spacer() }
         }
     }
 
@@ -222,6 +264,7 @@ struct CreateView: View {
                     .foregroundStyle(Theme.text)
                     .card(padding: 12)
                 tagRow(Self.genres + Self.vibes, into: $gen.style)
+                songwriterChips
             }
             VStack(alignment: .leading, spacing: 8) {
                 SectionLabel("Title")

@@ -118,6 +118,77 @@ struct Verbose {
     }
 };
 
+// ---- prompt enhancement: add to the user's words, never replace them ----
+
+std::string lower(std::string s) {
+    for (auto & ch : s) {
+        ch = (char) tolower((unsigned char) ch);
+    }
+    return s;
+}
+
+std::vector<std::string> keywords(const std::string & text) {
+    static const char * stop[] = { "the", "and", "with", "song", "music", "about", "for", "that", "this", "track",
+                                   "from", "into", "very", "some", "style", "like", "feat", "vibe", "sound" };
+    std::vector<std::string> out;
+    std::string              w;
+    auto                     flush = [&]() {
+        if (w.size() >= 3) {
+            bool s = false;
+            for (const char * x : stop) {
+                s |= w == x;
+            }
+            if (!s) {
+                out.push_back(w);
+            }
+        }
+        w.clear();
+    };
+    for (char ch : lower(text)) {
+        if (isalnum((unsigned char) ch) || ch == '&') {
+            w += ch;
+        } else {
+            flush();
+        }
+    }
+    flush();
+    return out;
+}
+
+// Relevant = the enhanced text keeps at least one of the user's key words
+// (a 3+ letter non-filler word). Catches the songwriter drifting off-topic.
+bool relevant(const std::string & user, const std::string & enhanced) {
+    auto uk = keywords(user);
+    if (uk.empty()) {
+        return true;
+    }
+    std::string e = lower(enhanced);
+    for (const auto & k : uk) {
+        if (e.find(k) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string merge_caption(const std::string & user, const std::string & enhanced) {
+    std::string u = user, en = enhanced;
+    while (!en.empty() && isspace((unsigned char) en.back())) {
+        en.pop_back();
+    }
+    if (en.empty() || lower(en) == lower(u) || !relevant(u, en)) {
+        return u;
+    }
+    if (lower(en).find(lower(u)) != std::string::npos && lower(en).rfind(lower(u), 0) == 0) {
+        return en.substr(0, 900);  // enhancement already starts with the user's exact words
+    }
+    std::string m = u;
+    while (!m.empty() && (m.back() == '.' || m.back() == ',' || isspace((unsigned char) m.back()))) {
+        m.pop_back();
+    }
+    return (m + ". " + en).substr(0, 900);
+}
+
 void set_err(char * err, int len, const char * msg) {
     if (err && len > 0) {
         snprintf(err, (size_t) len, "%s", msg);
@@ -291,8 +362,40 @@ int ace_engine_generate(ace_engine *             e,
         }
         // One poll per generated token: ~5 audio codes per second of music,
         // a few hundred tokens of metadata, plus lyrics when it writes them.
-        float expected = duration * 5.0f + 350.0f + (req.lyrics.empty() ? duration * 3.0f : 0.0f);
-        Tick  t{ progress, user, ACE_STAGE_SONGWRITER, expected, &peaks };
+        const bool enhance  = r->enhance_prompt != 0 && !req.caption.empty();
+        float      expected = duration * 5.0f + 350.0f + (req.lyrics.empty() ? duration * 3.0f : 0.0f) +
+                         (enhance ? 250.0f : 0.0f);
+        Tick       t{ progress, user, ACE_STAGE_SONGWRITER, expected, &peaks };
+
+        // Pass 1 (optional): enhance. FORMAT mode expands caption (and writes
+        // lyrics if empty); we keep the user's words first and drop drift.
+        if (enhance) {
+            AceRequest fmt  = req;
+            fmt.lm_mode     = LM_MODE_NAME_FORMAT;
+            fmt.use_cot_caption = true;
+            std::vector<AceRequest> fo(1);
+            int frc = ace_lm_generate(lmctx, &fmt, 1, fo.data(), nullptr, nullptr, tick_cb, &t, LM_MODE_FORMAT);
+            if (t.cancelled) {
+                ace_lm_free(lmctx);
+                return 1;
+            }
+            if (frc == 0) {
+                std::string merged = merge_caption(req.caption, fo[0].caption);
+                if (vb.on) {
+                    fprintf(stderr, "[Signature] enhance: user=\"%s\"\n[Signature] enhance: lm=\"%s\"\n[Signature] enhance: %s\n",
+                            req.caption.c_str(), fo[0].caption.c_str(),
+                            merged == req.caption ? "kept user prompt only (no relevant additions)" : "merged");
+                }
+                req.caption = merged;
+                if (req.lyrics.empty() && !fo[0].lyrics.empty()) {
+                    req.lyrics = fo[0].lyrics;
+                }
+            } else if (vb.on) {
+                fprintf(stderr, "[Signature] enhance: format pass failed, using prompt as typed\n");
+            }
+        }
+
+        // Pass 2: plan the song with the (locked) caption.
         std::vector<AceRequest> out(1);
         int rc = ace_lm_generate(lmctx, &req, 1, out.data(), nullptr, nullptr, tick_cb, &t, LM_MODE_GENERATE);
         ace_lm_free(lmctx);

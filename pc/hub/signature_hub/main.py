@@ -199,6 +199,7 @@ class GenBody(BaseModel):
     seed: int = -1
     bpm: int = 0
     simple: bool = False
+    enhance: bool = True
     source: Optional[str] = None
     task: str = "new"
     cover_strength: float = Field(default=0.7, ge=0, le=1)
@@ -233,7 +234,7 @@ async def generate(body: GenBody):
         datasets.check_name(body.style)
     job = gen.submit(caption=body.caption, lyrics=body.lyrics, duration=body.duration, language=body.language,
                      adapter=body.style, adapter_scale=body.style_scale, seed=body.seed, bpm=body.bpm,
-                     simple=body.simple, task=body.task if body.task in ("new", "cover", "repaint") else "new",
+                     simple=body.simple, enhance=body.enhance, task=body.task if body.task in ("new", "cover", "repaint") else "new",
                      source=_source_path(body.source), cover_strength=body.cover_strength,
                      repaint_start=body.repaint_start, repaint_end=body.repaint_end)
     return job.public()
