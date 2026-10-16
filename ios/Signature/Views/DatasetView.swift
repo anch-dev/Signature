@@ -21,77 +21,15 @@ struct DatasetView: View {
         return t
     }
     private var busy: Bool { hub.status?.training?.isRunning == true }
+    private var importing: Binding<Bool> {
+        Binding(get: { importKind != nil }, set: { if !$0 { importKind = nil } })
+    }
+    private let audioTypes: [UTType] = [.audio, .mp3, .wav, .mpeg4Audio]
 
     var body: some View {
-        List {
-            if let t = training { TrainingCard(job: t) }
-
-            Section {
-                TextField("e.g. melodic trap, 808s, airy pads, auto-tuned male vocal", text: $styleText, axis: .vertical)
-                    .lineLimit(2...4)
-                    .onSubmit(saveStyle)
-                if styleText != (detail?.style ?? "") {
-                    Button("Save", action: saveStyle)
-                }
-            } header: {
-                Text("Sound description")
-            } footer: {
-                Text("Used as the caption for songs that don't have their own. Trigger word: \(name)")
-            }
-
-            Section {
-                Button { importKind = "vocals" } label: { Label("Add songs with vocals", systemImage: "music.mic") }
-                Button { importKind = "instrumentals" } label: { Label("Add instrumentals / beats", systemImage: "pianokeys") }
-                if let u = uploadStatus {
-                    HStack { ProgressView(); Text(u).font(.callout) }
-                }
-            } footer: {
-                Text("Pick audio from Files (iCloud Drive, On My iPhone, USB). Only use music you own or have permission to train on.")
-            }
-
-            if let d = detail {
-                Section {
-                    Button {
-                        Task { await hub.startTraining(dataset: name, kind: "label", epochs: epochs, rank: rank); await reload() }
-                    } label: {
-                        Label("Transcribe lyrics on the PC", systemImage: "text.quote")
-                    }
-                    .disabled(busy || d.songs == 0 || d.labeled == d.songs)
-                    Button {
-                        showTrain = true
-                    } label: {
-                        Label(d.trained ? "Retrain style" : "Train style", systemImage: "wand.and.stars")
-                            .font(.headline)
-                    }
-                    .disabled(busy || d.songs < 3)
-                } footer: {
-                    Text(d.labeled < d.songs
-                         ? "\(d.songs - d.labeled) songs have no lyrics yet. Transcribe first so you can fix mistakes, or just train (it transcribes automatically)."
-                         : "All songs have lyrics. Tap a song to review them.")
-                }
-
-                Section("\(d.songs) songs") {
-                    ForEach(d.items) { s in
-                        Button { editing = s } label: { SongRow(song: s) }
-                            .foregroundStyle(.primary)
-                    }
-                    .onDelete { idx in
-                        let doomed = idx.map { d.items[$0] }
-                        Task {
-                            for s in doomed {
-                                let path = s.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? s.id
-                                try? await hub.client?.callIgnoring("DELETE", "/api/datasets/\(name)/songs/\(path)")
-                            }
-                            await reload()
-                        }
-                    }
-                }
-            } else {
-                Section { ProgressView() }
-            }
-        }
-        .screen()
-        .navigationTitle(name)
+        content
+            .screen()
+            .navigationTitle(name)
         .toolbar {
             Menu {
                 Button("Delete training set", role: .destructive) { confirmDelete = true }
@@ -106,8 +44,7 @@ struct DatasetView: View {
                 }
             }
         }
-        .fileImporter(isPresented: Binding(get: { importKind != nil }, set: { if !$0 { importKind = nil } }),
-                      allowedContentTypes: [.audio, .mp3, .wav, .mpeg4Audio], allowsMultipleSelection: true) { result in
+        .fileImporter(isPresented: importing, allowedContentTypes: audioTypes, allowsMultipleSelection: true) { result in
             let kind = importKind ?? "vocals"
             if case .success(let urls) = result { Task { await upload(urls, kind: kind) } }
         }
@@ -118,6 +55,90 @@ struct DatasetView: View {
         .refreshable { await reload() }
         .task { await reload() }
         .onChange(of: training?.status) { _ in Task { await reload() } }
+    }
+
+    private var content: some View {
+        List {
+            if let t = training { TrainingCard(job: t) }
+            descriptionSection
+            uploadSection
+            if let d = detail {
+                actionsSection(d)
+                songsSection(d)
+            } else {
+                Section { ProgressView() }
+            }
+        }
+    }
+
+    private var descriptionSection: some View {
+        Section {
+            TextField("e.g. melodic trap, 808s, airy pads, auto-tuned male vocal", text: $styleText, axis: .vertical)
+                .lineLimit(2...4)
+                .onSubmit(saveStyle)
+            if styleText != (detail?.style ?? "") {
+                Button("Save", action: saveStyle)
+            }
+        } header: {
+            Text("Sound description")
+        } footer: {
+            Text("Used as the caption for songs that don't have their own. Trigger word: \(name)")
+        }
+    }
+
+    private var uploadSection: some View {
+        Section {
+            Button { importKind = "vocals" } label: { Label("Add songs with vocals", systemImage: "music.mic") }
+            Button { importKind = "instrumentals" } label: { Label("Add instrumentals / beats", systemImage: "pianokeys") }
+            if let u = uploadStatus {
+                HStack { ProgressView(); Text(u).font(.callout) }
+            }
+        } footer: {
+            Text("Pick audio from Files (iCloud Drive, On My iPhone, USB). Only use music you own or have permission to train on.")
+        }
+    }
+
+    private func actionsSection(_ d: DatasetDetail) -> some View {
+        let unlabeled = d.songs - d.labeled
+        let footer = unlabeled > 0
+            ? "\(unlabeled) songs have no lyrics yet. Transcribe first so you can fix mistakes, or just train (it transcribes automatically)."
+            : "All songs have lyrics. Tap a song to review them."
+        return Section {
+            Button {
+                Task { await hub.startTraining(dataset: name, kind: "label", epochs: epochs, rank: rank); await reload() }
+            } label: {
+                Label("Transcribe lyrics on the PC", systemImage: "text.quote")
+            }
+            .disabled(busy || d.songs == 0 || unlabeled == 0)
+            Button {
+                showTrain = true
+            } label: {
+                Label(d.trained ? "Retrain style" : "Train style", systemImage: "wand.and.stars").font(.headline)
+            }
+            .disabled(busy || d.songs < 3)
+        } footer: {
+            Text(footer)
+        }
+    }
+
+    private func songsSection(_ d: DatasetDetail) -> some View {
+        Section("\(d.songs) songs") {
+            ForEach(d.items) { s in
+                Button { editing = s } label: { DatasetSongRow(song: s) }
+                    .foregroundStyle(.primary)
+            }
+            .onDelete { idx in deleteSongs(idx.map { d.items[$0] }) }
+        }
+    }
+
+    private func deleteSongs(_ doomed: [DatasetSong]) {
+        Task {
+            for s in doomed {
+                let path = s.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? s.id
+                try? await hub.client?.callIgnoring("DELETE", "/api/datasets/\(name)/songs/\(path)")
+            }
+            await reload()
+        }
     }
 
     private var trainSheet: some View {
@@ -191,7 +212,7 @@ struct DatasetView: View {
     }
 }
 
-private struct SongRow: View {
+private struct DatasetSongRow: View {
     let song: DatasetSong
     var body: some View {
         HStack {

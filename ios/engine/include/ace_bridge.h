@@ -57,7 +57,7 @@ typedef struct {
     char     keyscale[32];
     float    duration;
     char     caption[1024];        // caption the DiT used (songwriter may rewrite it)
-    char     lyrics[8192];         // lyrics used (written by the songwriter in simple mode)
+    char     lyrics[4096];         // lyrics used (written by the songwriter in simple mode)
     uint64_t peak_bytes[ACE_STAGE_COUNT];  // peak process memory per stage
     uint64_t mapped_ok;            // 1 if zero-copy mapping was used
 } ace_song_info;

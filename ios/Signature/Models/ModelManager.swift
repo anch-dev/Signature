@@ -306,9 +306,9 @@ final class BackgroundDownloader: NSObject, URLSessionDownloadDelegate, @uncheck
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("models", isDirectory: true)
         let dest = dir.appendingPathComponent(name)
-        var error: String?
+        var failure: String?
         if let http = downloadTask.response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            error = "Server returned \(http.statusCode)"
+            failure = "Server returned \(http.statusCode)"
         } else {
             do {
                 try? FileManager.default.removeItem(at: dest)
@@ -316,13 +316,13 @@ final class BackgroundDownloader: NSObject, URLSessionDownloadDelegate, @uncheck
                 let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)?.int64Value ?? 0
                 if let expected = Catalog.allFiles.first(where: { $0.id == name })?.bytes, size != expected {
                     try? FileManager.default.removeItem(at: dest)
-                    error = "Download was incomplete. Tap to retry."
+                    failure = "Download was incomplete. Tap to retry."
                 }
             } catch {
-                error = "Couldn't save the file: \(error.localizedDescription)"
+                failure = "Couldn't save the file: \(error.localizedDescription)"
             }
         }
-        notify { $0.didFinish(name, error: error) }
+        notify { $0.didFinish(name, error: failure) }
     }
 
     func urlSession(_ s: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
