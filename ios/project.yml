@@ -1,0 +1,57 @@
+name: Signature
+options:
+  bundleIdPrefix: com.anchdev
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGNING_REQUIRED: "NO"
+    ENABLE_BITCODE: "NO"
+    SUPPORTED_PLATFORMS: iphoneos
+    TARGETED_DEVICE_FAMILY: "1,2"
+    OTHER_LDFLAGS: ["-lc++"]
+targets:
+  Signature:
+    type: application
+    platform: iOS
+    scheme: {}
+    sources:
+      - path: Signature
+    dependencies:
+      - framework: Frameworks/AceEngine.xcframework
+        embed: false
+      - sdk: Metal.framework
+      - sdk: Accelerate.framework
+      - sdk: AVFoundation.framework
+    entitlements:
+      path: Signature/Signature.entitlements
+      properties:
+        com.apple.developer.kernel.increased-memory-limit: true
+    info:
+      path: Signature/Info.plist
+      properties:
+        CFBundleDisplayName: Signature
+        UILaunchScreen: {}
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: false
+        UIBackgroundModes: [audio]
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: com.anchdev.signature.safetensors
+            UTTypeDescription: Style adapter
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [safetensors]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Style adapter
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Owner
+            LSItemContentTypes: [com.anchdev.signature.safetensors]

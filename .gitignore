@@ -1,0 +1,19 @@
+# iOS build outputs
+ios/vendor/
+ios/build/
+ios/Frameworks/
+ios/*.xcodeproj/
+ios/Signature/Info.plist
+ios/Signature/Signature.entitlements
+Payload/
+*.ipa
+
+# Trainer outputs
+work/
+Side-Step/
+*.safetensors
+
+# OS / editor
+.DS_Store
+__pycache__/
+*.pyc

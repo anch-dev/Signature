@@ -1,0 +1,87 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # lets tagged builds attach the IPA to a GitHub Release
+
+jobs:
+  ipa:
+    runs-on: macos-15
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app || true; xcodebuild -version
+
+      - name: Install tools
+        run: brew install xcodegen ldid
+
+      # The engine (acestep.cpp + ggml Metal) takes ~10 min to compile; cache it.
+      - name: Cache engine
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: ios/Frameworks/AceEngine.xcframework
+          key: engine-${{ hashFiles('ios/engine/**', 'ios/scripts/build-engine.sh') }}
+
+      - name: Build engine
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        run: bash scripts/build-engine.sh
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build app
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild \
+            -project Signature.xcodeproj \
+            -scheme Signature \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tee build/xcodebuild.log | grep -E "error:|warning: unable|BUILD (SUCCEEDED|FAILED)" || true
+          test -d build/dd/Build/Products/Release-iphoneos/Signature.app
+
+      - name: Package IPA
+        run: |
+          APP=build/dd/Build/Products/Release-iphoneos/Signature.app
+          # Fake-sign so the increased-memory-limit entitlement travels with the
+          # binary; SideStore/AltStore re-sign it with your Apple ID on install.
+          ldid -SSignature/Signature.entitlements "$APP/Signature"
+          rm -rf Payload && mkdir Payload && cp -R "$APP" Payload/
+          zip -qry ../Signature.ipa Payload
+          ls -lh ../Signature.ipa
+
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: ios/build/xcodebuild.log
+          if-no-files-found: ignore
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Signature-ipa
+          path: Signature.ipa
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Signature.ipa
