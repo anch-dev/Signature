@@ -51,6 +51,17 @@ struct ModelPickerSheet: View {
                             .tint(Theme.accent)
                         }
                         VStack(alignment: .leading, spacing: 8) {
+                            SectionLabel("Also used with every music model")
+                            VStack(spacing: 8) {
+                                supportRow("Text encoder", "Qwen3-Embedding 0.6B · reads your prompt", models.textEncoderFile)
+                                supportRow("Audio decoder", "VAE · turns the output into sound", Catalog.vae)
+                                if models.useSongwriter, let f = models.songwriterFile {
+                                    supportRow("Songwriter", "\(models.songwriter.name) · lyrics and structure", f)
+                                }
+                            }
+                            .card(padding: 12)
+                        }
+                        VStack(alignment: .leading, spacing: 8) {
                             SectionLabel("Songwriter")
                             Toggle(isOn: $models.useSongwriter) {
                                 VStack(alignment: .leading, spacing: 2) {
@@ -79,6 +90,93 @@ struct ModelPickerSheet: View {
         }
         .presentationDetents([.medium, .large])
         .preferredColorScheme(.dark)
+    }
+}
+
+extension ModelPickerSheet {
+    func supportRow(_ title: String, _ detail: String, _ f: ModelFile) -> some View {
+        HStack {
+            Image(systemName: models.isInstalled(f) ? "checkmark.circle.fill" : "arrow.down.circle")
+                .foregroundStyle(models.isInstalled(f) ? Theme.good : Theme.warn)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                Text(detail).font(.caption).foregroundStyle(Theme.muted)
+            }
+            Spacer()
+            if !models.isInstalled(f) {
+                Button("Get") { models.download(f) }.font(.caption.weight(.semibold)).tint(Theme.accent)
+            }
+        }
+    }
+}
+
+/// Settings: everything downloaded, grouped by what it does.
+struct DownloadedModelsSection: View {
+    @EnvironmentObject var models: ModelManager
+
+    private struct Group: Identifiable {
+        let id: String
+        let title: String
+        let detail: String
+        let files: [(ModelFile, String)]   // file, display name
+    }
+
+    private var groups: [Group] {
+        let installed = models.installed
+        let music = Catalog.music.flatMap { m in
+            m.quants.compactMap { q in m.file(q).flatMap { installed.contains($0.id) ? ($0, "\(m.name) · \(q.label)") : nil } }
+        }
+        let writers = Catalog.songwriters.flatMap { w in
+            w.quants.compactMap { q in w.file(q).flatMap { installed.contains($0.id) ? ($0, "\(w.name) · \(q.label)") : nil } }
+        }
+        let enc = Catalog.textEncoders.sorted { $0.key.rawValue < $1.key.rawValue }.compactMap { q, f in
+            installed.contains(f.id) ? (f, "Qwen3-Embedding 0.6B · \(q.label)") : nil
+        }
+        let vae = installed.contains(Catalog.vae.id) ? [(Catalog.vae, "ACE-Step VAE")] : []
+        return [
+            Group(id: "music", title: "Music models", detail: "Generate the audio (DiT)", files: music),
+            Group(id: "writer", title: "Songwriter", detail: "Writes lyrics, plans structure (5Hz LM)", files: writers),
+            Group(id: "enc", title: "Text encoder", detail: "Reads your prompt (Qwen3)", files: enc),
+            Group(id: "vae", title: "Audio decoder", detail: "Turns model output into sound (VAE)", files: vae),
+        ]
+    }
+
+    private func inUse(_ f: ModelFile) -> Bool { models.required.contains(f) }
+
+    var body: some View {
+        Section {
+            ForEach(groups) { g in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text(g.title).font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Text(g.files.isEmpty ? "none" : "\(g.files.count)").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(g.detail).font(.caption).foregroundStyle(.secondary)
+                    if g.files.isEmpty {
+                        Text("Nothing downloaded").font(.caption).foregroundStyle(Theme.warn)
+                    }
+                    ForEach(g.files, id: \.0.id) { f, name in
+                        HStack {
+                            Image(systemName: inUse(f) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(inUse(f) ? Theme.accent : .secondary)
+                            Text(name).font(.callout)
+                            Spacer()
+                            Text(ModelManager.format(f.bytes)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        .contextMenu {
+                            Button(role: .destructive) { models.delete(f) } label: { Label("Delete", systemImage: "trash") }
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+            LabeledContent("Total", value: ModelManager.format(models.usedBytes))
+        } header: {
+            Text("Downloaded")
+        } footer: {
+            Text("A filled circle means the file is used by your current setup. Long-press any file to delete it.")
+        }
     }
 }
 
@@ -265,9 +363,11 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                DownloadedModelsSection()
+
                 Section {
                     NavigationLink { ModelsView() } label: {
-                        LabeledContent("Models", value: models.music.name)
+                        LabeledContent("Get more models", value: models.music.name)
                     }
                     if !models.isReady {
                         ReadinessCard().listRowInsets(EdgeInsets()).listRowBackground(Color.clear)

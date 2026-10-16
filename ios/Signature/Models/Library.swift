@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 struct Song: Identifiable, Codable, Hashable {
     var id: UUID
@@ -121,4 +122,14 @@ final class AdapterStore: ObservableObject {
 
     /// The trainer exports <trigger>.safetensors, so the file name is the trigger word.
     static func name(_ url: URL) -> String { url.deletingPathExtension().lastPathComponent }
+}
+
+/// Opens the Files app at a song's folder (On My iPhone → Signature → Songs).
+enum FilesApp {
+    @MainActor static func reveal(_ file: URL) {
+        let folder = file.deletingLastPathComponent().path
+        guard let encoded = folder.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: "shareddocuments://" + encoded) else { return }
+        UIApplication.shared.open(url)
+    }
 }

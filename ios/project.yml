@@ -42,7 +42,7 @@ targets:
         UIApplicationSupportsIndirectInputEvents: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIFileSharingEnabled: true
-        LSSupportsOpeningDocumentsInPlace: false
+        LSSupportsOpeningDocumentsInPlace: true   # makes On My iPhone → Signature visible in Files
         UIBackgroundModes: [audio]
         CFBundleURLTypes:
           - CFBundleURLName: com.anchdev.signature.pair

@@ -144,6 +144,7 @@ class Generator:
                 "lyrics": job.lyrics if job.simple else (job.lyrics or "[Instrumental]"),
                 "audio_duration": job.duration,
                 "thinking": True,            # songwriter LM plans structure -> better vocals
+                "use_cot_caption": False,    # keep the user's style prompt exactly as typed
                 "batch_size": 1,
                 "audio_format": "mp3",
                 "inference_steps": 8,

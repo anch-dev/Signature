@@ -64,6 +64,10 @@ final class Generator: ObservableObject {
     @Published private(set) var progress: Double = 0
     @Published private(set) var statusText = ""
     @Published private(set) var startedAt: Date?
+    /// Estimated seconds remaining (nil until there's enough signal).
+    @Published private(set) var eta: Double?
+    private var etaKey = ""
+    private var etaGuess: Double?
     @Published var error: String?
     @Published var lastSong: Song?
 
@@ -136,9 +140,49 @@ final class Generator: ObservableObject {
             .first { !$0.isEmpty && !$0.hasPrefix("[") } ?? lyrics
     }
 
+    /// Seconds of work per second of audio from the last run with this setup.
+    private func historyRate(_ key: String) -> Double? {
+        let v = UserDefaults.standard.double(forKey: "rate." + key)
+        return v > 0 ? v : nil
+    }
+
+    private func saveRate(_ key: String, audioSeconds: Double) {
+        guard let start = startedAt, audioSeconds > 0 else { return }
+        let rate = Date().timeIntervalSince(start) / audioSeconds
+        let old = historyRate(key)
+        UserDefaults.standard.set(old.map { $0 * 0.4 + rate * 0.6 } ?? rate, forKey: "rate." + key)
+    }
+
+    /// Blend the history-based guess with the live rate as progress accumulates.
+    private func updateETA() {
+        guard let start = startedAt else { eta = nil; return }
+        let elapsed = Date().timeIntervalSince(start)
+        var live: Double?
+        if progress > 0.04 { live = max(0, elapsed / progress - elapsed) }
+        let guess = etaGuess.map { max(0, $0 - elapsed) }
+        let next: Double?
+        switch (live, guess) {
+        case let (l?, g?):
+            let w = min(1, progress / 0.5)          // trust the live rate more as we go
+            next = l * w + g * (1 - w)
+        case let (l?, nil): next = l
+        case let (nil, g?): next = g
+        default: next = nil
+        }
+        if let n = next, let old = eta { eta = old * 0.7 + n * 0.3 } else { eta = next }
+    }
+
+    var etaText: String? {
+        guard let e = eta, running else { return nil }
+        if e < 5 { return "almost done" }
+        let s = Int(e.rounded())
+        return s >= 60 ? "~\(s / 60):\(String(format: "%02d", s % 60)) left" : "~\(s)s left"
+    }
+
     private func begin(_ text: String) {
         error = nil
         running = true
+        eta = nil
         progress = 0
         statusText = text
         startedAt = Date()
@@ -174,8 +218,11 @@ final class Generator: ObservableObject {
 
         let (out, fileName) = library.newFileURL(title: p.title)
         let usesWriter = paths.songwriter != nil && mode != .cover
+        etaKey = "\(models.musicID).\(models.musicQuant.rawValue).\(usesWriter).\(options.lowMemory).\(options.useCPU)"
         begin(usesWriter ? GenStage.songwriter.label : GenStage.diffusion.label)
         stage = usesWriter ? .songwriter : .diffusion
+        etaGuess = historyRate(etaKey).map { $0 * request.duration }
+        updateETA()
         LogCapture.shared.log("Start: \(modelName), \(mode.title), \(Int(request.duration))s, \(options.useCPU ? "CPU" : "GPU")\(options.lowMemory ? ", Lite" : "")")
         UIApplication.shared.isIdleTimerDisabled = true  // screen lock suspends GPU work
 
@@ -191,6 +238,7 @@ final class Generator: ObservableObject {
                             self.stage = s
                             self.statusText = s.label
                             self.progress = max(self.progress, value)
+                            self.updateETA()
                         }
                     },
                     isCancelled: { flag.get() })
@@ -199,6 +247,7 @@ final class Generator: ObservableObject {
                     return
                 }
                 models.recordPeaks(result.peakBytes)
+                saveRate(etaKey, audioSeconds: request.duration)
                 let song = Song(
                     id: UUID(), title: p.title, caption: result.caption.isEmpty ? p.caption : result.caption,
                     lyrics: result.lyrics.isEmpty ? request.lyrics : result.lyrics,
@@ -258,6 +307,7 @@ final class Generator: ObservableObject {
                     // ACE-Step doesn't report fine progress; estimate from typical turbo speed on a 3080 Ti.
                     let expected = max(20, job.duration * 0.6)
                     progress = min(0.95, Double(job.elapsed) / expected)
+                    eta = max(3, expected - Double(job.elapsed))
                 }
                 if job.status == "failed" {
                     throw HubError.server(job.message.isEmpty ? "Generation failed on the PC" : job.message)

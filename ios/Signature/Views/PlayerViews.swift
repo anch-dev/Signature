@@ -160,6 +160,11 @@ struct NowPlayingView: View {
                         } label: {
                             Label("Reuse", systemImage: "arrow.uturn.left").frame(maxWidth: .infinity)
                         }
+                        Button {
+                            FilesApp.reveal(library.url(for: s))
+                        } label: {
+                            Label("Files", systemImage: "folder").frame(maxWidth: .infinity)
+                        }
                     }
                     .buttonStyle(.bordered).tint(.white)
                     Button {
@@ -241,6 +246,7 @@ struct LibraryView: View {
                                 .listRowSeparatorTint(Theme.stroke)
                                 .contextMenu {
                                     ShareLink(item: library.url(for: s)) { Label("Share", systemImage: "square.and.arrow.up") }
+                                    Button { FilesApp.reveal(library.url(for: s)) } label: { Label("Show in Files", systemImage: "folder") }
                                     Button { gen.reuse(s) } label: { Label("Reuse prompt", systemImage: "arrow.uturn.left") }
                                     Button {
                                         gen.prepareCover(source: library.url(for: s), name: s.title, duration: s.duration,
@@ -257,6 +263,12 @@ struct LibraryView: View {
                     }
                     .listStyle(.plain)
                     .searchable(text: $query, prompt: "Search songs and lyrics")
+                    .toolbar {
+                        Button { FilesApp.reveal(library.songsDir.appendingPathComponent("x")) } label: {
+                            Image(systemName: "folder")
+                        }
+                        .accessibilityLabel("Open Songs folder in Files")
+                    }
                 }
             }
             .screen()

@@ -213,6 +213,10 @@ int ace_engine_generate(ace_engine *             e,
     }
     req.seed            = r->seed;
     req.inference_steps = r->inference_steps > 0 ? r->inference_steps : 0;
+    // Your prompt is the style. The songwriter may write lyrics and pick BPM/key,
+    // but must not rewrite the caption (it otherwise replaces short prompts like
+    // "hip hop" with its own, unrelated description).
+    req.use_cot_caption = false;
     req.task_type       = task == ACE_TASK_COVER ? TASK_COVER : task == ACE_TASK_REPAINT ? TASK_REPAINT : TASK_TEXT2MUSIC;
     if (task == ACE_TASK_COVER) {
         req.audio_cover_strength = r->cover_strength > 0 ? std::min(r->cover_strength, 1.0f) : 1.0f;

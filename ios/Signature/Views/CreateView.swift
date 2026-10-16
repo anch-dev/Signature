@@ -57,7 +57,8 @@ struct CreateView: View {
             .screen()
             .safeAreaInset(edge: .bottom) {
                 CreateButton(title: onPC ? "Create on \(hub.pairing?.name ?? "PC")" : "Create",
-                             running: gen.running, progress: gen.progress, status: gen.statusText,
+                             running: gen.running, progress: gen.progress,
+                             status: gen.etaText.map { "\(gen.statusText) · \($0)" } ?? gen.statusText,
                              enabled: ready, action: create, cancel: gen.cancel)
                     .padding(.horizontal, 16).padding(.vertical, 8)
                     .background(Theme.bg.opacity(0.92))
