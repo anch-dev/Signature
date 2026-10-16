@@ -60,6 +60,9 @@ jobs:
             msg=$(echo "$line" | cut -d: -f5- | sed 's/^ *//')
             echo "::error file=ios/$f,line=$l::$msg"
           done
+          # Linker and other non-file errors.
+          grep -E "(^ld: |Undefined symbol|^error: |clang: error|: fatal error|\(in target)" build/xcodebuild.log \
+            | sort -u | head -30 | while IFS= read -r line; do echo "::error::${line:0:400}"; done
           grep -E "BUILD (SUCCEEDED|FAILED)" build/xcodebuild.log || tail -30 build/xcodebuild.log
           test -d build/dd/Build/Products/Release-iphoneos/Signature.app
 
