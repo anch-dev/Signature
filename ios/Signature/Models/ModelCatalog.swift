@@ -1,5 +1,6 @@
 import Foundation
 import os
+import AceEngine
 
 // MARK: - Catalog of every ACE-Step 1.5 GGUF (Serveurperso/ACE-Step-1.5-GGUF)
 
@@ -114,28 +115,19 @@ enum Fit: Comparable {
 enum Device {
     static var physicalGB: Double { Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824 }
 
-    /// What iOS realistically lets one app use on this RAM size, even with the
-    /// increased-memory-limit entitlement: ~5.5 GB of an 8 GB iPhone, ~3.3 of
-    /// 6 GB, ~2.2 of 4 GB. Used as a ceiling so a lucky reading at launch
-    /// doesn't recommend models that get killed later.
-    static var ceiling: Int64 {
-        let gb = physicalGB
-        let cap: Double
-        switch gb {
-        case ..<4.6: cap = 2.2
-        case ..<6.6: cap = 3.3
-        case ..<8.6: cap = 5.5
-        case ..<12.6: cap = 7.5
-        default: cap = gb * 0.6
-        }
-        return Int64(cap * 1_073_741_824)
-    }
+    /// The engine's platform-aware budget. Each OS limits apps differently
+    /// (iOS: hard per-app cap, ~5.5 GB of an 8 GB iPhone; Android: no fixed
+    /// cap but about half of RAM is safe; macOS: ~2/3 of unified memory;
+    /// Windows/Linux with a GPU: free VRAM). The policy lives in the shared
+    /// engine so every platform's app agrees with the engine's memory guard.
+    static var info: ace_memory_budget_info { ace_memory_budget(0) }
 
-    /// Memory iOS lets this app use right now plus what it already uses,
-    /// capped at the realistic ceiling for this RAM size.
-    static var budget: Int64 {
-        let measured = Int64(os_proc_available_memory()) + Int64(SongEngine.footprint)
-        return measured > 512 * 1_048_576 ? min(measured, ceiling) : ceiling
+    /// Memory models may use on this device, capped at the platform's ceiling.
+    static var budget: Int64 { Int64(info.budget) }
+
+    static var platformNote: String {
+        var i = info
+        return withUnsafeBytes(of: &i.note) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) }
     }
 
     static var budgetGB: Double { Double(budget) / 1_073_741_824 }

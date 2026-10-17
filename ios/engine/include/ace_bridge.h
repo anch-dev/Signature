@@ -104,6 +104,25 @@ int ace_engine_generate(ace_engine *             e,
 // Current process memory footprint in bytes (what iOS counts against the app).
 uint64_t ace_memory_footprint(void);
 
+// How much memory models may use on this device. Every OS limits apps
+// differently: iOS has a hard per-app jetsam cap (~5.5 GB of an 8 GB iPhone),
+// Android has no fixed cap but the low-memory killer leaves roughly half of
+// RAM, macOS shares unified memory with the GPU (~2/3 usable), and Windows /
+// Linux with a discrete GPU are limited by free VRAM instead of RAM.
+typedef struct {
+    uint64_t budget;      // usable for models now, capped at the platform ceiling
+    uint64_t headroom;    // live: what the OS reports free for this process
+    uint64_t footprint;   // this process now
+    uint64_t physical;    // installed RAM
+    uint64_t gpu_total;   // discrete GPU memory (0 = unified / CPU)
+    int      unified;     // 1 = models share system RAM (phones, Apple Silicon, CPU)
+    char     platform[16];
+    char     device[96];  // GPU name when discrete
+    char     note[160];   // one line for Settings
+} ace_memory_budget_info;
+
+ace_memory_budget_info ace_memory_budget(int use_cpu);
+
 #ifdef __cplusplus
 }
 #endif

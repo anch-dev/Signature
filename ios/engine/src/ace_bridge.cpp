@@ -31,12 +31,19 @@
 #    endif
 #elif defined(__linux__)
 #    include <unistd.h>
+#elif defined(_WIN32)
+#    define WIN32_LEAN_AND_MEAN
+#    include <windows.h>
+#    include <psapi.h>
+#endif
+#if defined(__APPLE__) && !TARGET_OS_IPHONE
+#    include <sys/sysctl.h>
 #endif
 
 struct ace_engine {
     ModelStore *       store = nullptr;
     std::mutex         busy;  // one song at a time
-    ace_engine_options opts{ 1, 0, 0, 0 };
+    ace_engine_options opts{ 1, 0, 0, 0, 2 };
 };
 
 extern "C" uint64_t ace_memory_footprint(void) {
@@ -58,9 +65,159 @@ extern "C" uint64_t ace_memory_footprint(void) {
     }
     fclose(f);
     return (uint64_t) resident * (uint64_t) sysconf(_SC_PAGESIZE);
+#elif defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS pmc;
+    if (K32GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+        return (uint64_t) pmc.WorkingSetSize;
+    }
+    return 0;
 #else
     return 0;
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// Memory budget per platform. Each OS limits an app differently, so the
+// policy lives here, shared by every front end (iOS, Android, desktop).
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr double GiB = 1073741824.0;
+
+uint64_t physical_memory() {
+#if defined(__APPLE__)
+    uint64_t mem = 0;
+    size_t   len = sizeof(mem);
+    if (sysctlbyname("hw.memsize", &mem, &len, nullptr, 0) == 0) {
+        return mem;
+    }
+    return 0;
+#elif defined(__linux__)
+    long pages = sysconf(_SC_PHYS_PAGES), page = sysconf(_SC_PAGESIZE);
+    return pages > 0 && page > 0 ? (uint64_t) pages * (uint64_t) page : 0;
+#elif defined(_WIN32)
+    MEMORYSTATUSEX st;
+    st.dwLength = sizeof(st);
+    return GlobalMemoryStatusEx(&st) ? (uint64_t) st.ullTotalPhys : 0;
+#else
+    return 0;
+#endif
+}
+
+#if defined(__linux__)
+// MemAvailable from /proc/meminfo (Linux and Android).
+uint64_t meminfo_available() {
+    FILE * f = fopen("/proc/meminfo", "r");
+    if (!f) {
+        return 0;
+    }
+    char     line[256];
+    uint64_t kb = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "MemAvailable: %llu kB", (unsigned long long *) &kb) == 1) {
+            break;
+        }
+    }
+    fclose(f);
+    return kb * 1024ull;
+}
+#endif
+
+// Live headroom: what this process can still allocate before the OS is likely
+// to kill it or start swapping. 0 = unknown.
+uint64_t live_headroom() {
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    return (uint64_t) os_proc_available_memory();  // hard jetsam limit
+#elif defined(__linux__)
+    return meminfo_available();  // Android LMK and Linux both key off this
+#elif defined(_WIN32)
+    MEMORYSTATUSEX st;
+    st.dwLength = sizeof(st);
+    return GlobalMemoryStatusEx(&st) ? (uint64_t) st.ullAvailPhys : 0;
+#elif defined(__APPLE__)
+    vm_statistics64_data_t vm;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t) &vm, &count) == KERN_SUCCESS) {
+        uint64_t page = (uint64_t) vm_kernel_page_size;
+        return (uint64_t) (vm.free_count + vm.inactive_count + vm.purgeable_count) * page;
+    }
+    return 0;
+#else
+    return 0;
+#endif
+}
+
+// Realistic ceiling for one app on this platform and RAM size.
+uint64_t platform_ceiling(uint64_t phys, const char ** platform, const char ** note) {
+    double gb = (double) phys / GiB, cap;
+#if defined(__APPLE__) && TARGET_OS_IPHONE
+    // jetsam per-app limit with increased-memory-limit
+    *platform = "iOS";
+    *note     = "iOS caps each app (about 5.5 GB on 8 GB iPhones).";
+    cap       = gb < 4.6 ? 2.2 : gb < 6.6 ? 3.3 : gb < 8.6 ? 5.5 : gb < 12.6 ? 7.5 : gb * 0.6;
+#elif defined(__ANDROID__)
+    // No fixed per-app cap, but the OS and resident apps keep ~40-55% and the
+    // low-memory killer reclaims the foreground app past that.
+    *platform = "Android";
+    *note     = "Android has no fixed app limit; the system keeps a large share, so this is what's safe to use.";
+    cap       = gb < 4.6 ? 1.5 : gb < 6.6 ? 2.5 : gb < 8.6 ? 3.5 : gb < 12.6 ? 5.5 : gb < 16.6 ? 8.0 : gb * 0.55;
+#elif defined(__APPLE__)
+    // Unified memory; Metal's working-set limit is ~65-75% of RAM.
+    *platform = "macOS";
+    *note     = "Unified memory: the GPU can use about two-thirds of RAM.";
+    cap       = gb * 0.66;
+#elif defined(_WIN32)
+    *platform = "Windows";
+    *note     = "System RAM (CPU); a GPU uses its own memory.";
+    cap       = gb * 0.75;
+#else
+    *platform = "Linux";
+    *note     = "System RAM (CPU); a GPU uses its own memory.";
+    cap       = gb * 0.75;
+#endif
+    return (uint64_t) (cap * GiB);
+}
+
+}  // namespace
+
+extern "C" ace_memory_budget_info ace_memory_budget(int use_cpu) {
+    ace_memory_budget_info b{};
+    const char *           platform = "";
+    const char *           note     = "";
+    b.physical                      = physical_memory();
+    b.footprint                     = ace_memory_footprint();
+    b.headroom                      = live_headroom();
+    uint64_t ceiling                = platform_ceiling(b.physical, &platform, &note);
+    uint64_t live                   = b.headroom ? b.headroom + b.footprint : ceiling;
+    b.budget                        = std::min(live, ceiling);
+    b.unified                       = 1;
+
+#if !(defined(__APPLE__) || defined(__ANDROID__))
+    // Discrete GPU (CUDA / Vulkan / ROCm): the model lives in VRAM.
+    if (!use_cpu) {
+        for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+                continue;
+            }
+            size_t free = 0, total = 0;
+            ggml_backend_dev_memory(dev, &free, &total);
+            if (total > 0) {
+                b.unified = 0;
+                b.gpu_total = total;
+                b.budget    = (uint64_t) ((double) free * 0.92);  // driver + display reserve
+                snprintf(b.device, sizeof(b.device), "%s", ggml_backend_dev_description(dev));
+                note = "GPU memory (VRAM). Low memory mode streams layers from RAM/storage.";
+                break;
+            }
+        }
+    }
+#else
+    (void) use_cpu;
+#endif
+    snprintf(b.platform, sizeof(b.platform), "%s", platform);
+    snprintf(b.note, sizeof(b.note), "%s", note);
+    return b;
 }
 
 namespace {
@@ -209,13 +366,17 @@ std::string merge_caption(const std::string & user, const std::string & enhanced
     return (m + ". " + en).substr(0, 900);
 }
 
-// Bytes the OS will still let this process allocate (iOS); 0 = unknown.
+// Bytes this process may still use for the next model (platform-aware); 0 = unknown.
+uint64_t g_use_cpu = 0;
 uint64_t available_memory() {
-#if defined(__APPLE__) && TARGET_OS_IPHONE
-    return (uint64_t) os_proc_available_memory();
-#else
-    return 0;
-#endif
+    ace_memory_budget_info b = ace_memory_budget((int) g_use_cpu);
+    if (b.budget == 0) {
+        return 0;
+    }
+    if (!b.unified) {
+        return b.budget;  // free VRAM, already live
+    }
+    return b.budget > b.footprint ? b.budget - b.footprint : 0;
 }
 
 uint64_t file_size(const char * path) {
@@ -308,6 +469,7 @@ void ace_engine_set_options(ace_engine * e, const ace_engine_options * o) {
     g_wctx_zero_copy = o->zero_copy != 0;
     g_wctx_no_fuse   = g_wctx_zero_copy;  // fused weights can't be mapped from the file
     // Takes effect the next time a model loads (strict eviction reloads per stage).
+    g_use_cpu = o->use_cpu ? 1 : 0;
     if (o->use_cpu) {
         backend_set_device("CPU");
     } else {

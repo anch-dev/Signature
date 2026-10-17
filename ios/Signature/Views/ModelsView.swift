@@ -449,6 +449,7 @@ struct SettingsView: View {
 
                 Section {
                     LabeledContent("Memory for Signature", value: String(format: "%.1f GB", Device.budgetGB))
+                    Text(Device.platformNote).font(.footnote).foregroundStyle(.secondary)
                     LabeledContent("Longest song", value: CreateView.time(models.maxDuration))
                     if models.lastPeaks.count == 4 {
                         ForEach(0..<4, id: \.self) { i in
