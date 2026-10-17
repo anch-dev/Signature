@@ -242,7 +242,8 @@ final class Generator: ObservableObject {
 
         let (out, fileName) = library.newFileURL(title: p.title)
         let usesWriter = paths.songwriter != nil && mode != .cover
-        etaKey = "\(models.musicID).\(models.musicQuant.rawValue).\(usesWriter).\(options.lowMemory).\(options.useCPU)"
+        let streaming = models.willStream
+        etaKey = "\(models.musicID).\(models.musicQuant.rawValue).\(usesWriter).\(options.lowMemory).\(options.useCPU)\(streaming ? ".stream" : "")"
         begin(usesWriter ? GenStage.songwriter.label : GenStage.diffusion.label)
         stage = usesWriter ? .songwriter : .diffusion
         etaGuess = historyRate(etaKey).map { $0 * request.duration }
@@ -251,7 +252,7 @@ final class Generator: ObservableObject {
         LogCapture.shared.debug("Request: caption=\"\(request.caption)\" lyrics=\(request.lyrics.isEmpty ? "(songwriter writes)" : "\(request.lyrics.count) chars") language=\(request.language.isEmpty ? "auto" : request.language) seed=\(request.seed) style=\(styleName ?? "base") scale=\(request.adapterScale) task=\(request.task)")
         LogCapture.shared.debug("Device: memory budget \(String(format: "%.2f", Device.budgetGB)) GB, max length \(Int(models.maxDuration))s, ETA guess \(etaGuess.map { "\(Int($0))s" } ?? "none")")
         updateETA()
-        LogCapture.shared.log("Start: \(modelName), \(mode.title), \(Int(request.duration))s, \(options.useCPU ? "CPU" : "GPU")\(options.lowMemory ? ", Lite" : "")")
+        LogCapture.shared.log("Start: \(modelName), \(mode.title), \(Int(request.duration))s, \(options.useCPU ? "CPU" : "GPU")\(options.lowMemory ? ", Lite" : "")\(streaming ? ", Low memory (streaming)" : "")")
         UIApplication.shared.isIdleTimerDisabled = true  // screen lock suspends GPU work
 
         let flag = cancelFlag
@@ -286,6 +287,7 @@ final class Generator: ObservableObject {
                     adapter: styleName, seed: result.seed, bpm: result.bpm,
                     key: result.key, duration: result.duration, created: Date(), fileName: fileName,
                     madeOn: "iPhone", model: modelName, prompt: mode == .simple ? songDescription : style)
+                if result.streamed { LogCapture.shared.log("Music model ran layer-streamed from storage") }
                 LogCapture.shared.log("Done: \(p.title), peak \(ByteCountFormatter.string(fromByteCount: Int64(result.peakBytes.max() ?? 0), countStyle: .memory))")
                 library.add(song)
                 lastSong = song

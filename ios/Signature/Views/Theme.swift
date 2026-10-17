@@ -225,6 +225,7 @@ struct FitBadge: View {
         switch fit {
         case .good: return Theme.good
         case .tight: return Theme.warn
+        case .streamed: return Theme.accent
         case .tooBig: return Theme.bad
         }
     }

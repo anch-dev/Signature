@@ -231,7 +231,8 @@ uint64_t file_size(const char * path) {
 
 // Refuse to load a model that clearly can't fit, instead of being killed by iOS.
 // Mapped weights are file-backed (reclaimable), so only part of the file counts.
-bool fits(const char * path, bool mapped, char * err, int err_len, const char * what);
+uint64_t module_need(const char * path, bool low, bool streamed);
+bool     fits_need(uint64_t need, char * err, int err_len, const char * what, const char * hint);
 
 void set_err(char * err, int len, const char * msg) {
     if (err && len > 0) {
@@ -245,21 +246,23 @@ void copy_str(char * dst, size_t cap, const std::string & s) {
     snprintf(dst, cap, "%s", s.c_str());
 }
 
-bool fits(const char * path, bool mapped, char * err, int err_len, const char * what) {
+// Rough resident need of a module: weights (a mapped file still counts once
+// the GPU wires it) plus working memory for activations, KV cache and tiles.
+uint64_t module_need(const char * path, bool low, bool streamed) {
+    uint64_t size    = file_size(path);
+    uint64_t working = (low ? 500ull : 900ull) * 1048576ull;
+    double   frac    = streamed ? 0.12 : 1.0;  // streamed: embeddings + one layer
+    return (uint64_t) ((double) size * frac) + working;
+}
+
+bool fits_need(uint64_t need, char * err, int err_len, const char * what, const char * hint) {
     uint64_t avail = available_memory();
-    if (avail == 0) {
-        return true;
-    }
-    uint64_t size = file_size(path);
-    uint64_t need = (uint64_t) ((double) size * (mapped ? 0.35 : 1.05)) + 350ull * 1048576ull;
-    if (need <= avail) {
+    if (avail == 0 || need <= avail) {
         return true;
     }
     if (err && err_len > 0) {
-        snprintf(err, (size_t) err_len,
-                 "Not enough memory for the %s (needs about %.1f GB, %.1f GB free). Pick a smaller size "
-                 "(Compact), turn on Lite in Settings, or close other apps.",
-                 what, (double) need / 1073741824.0, (double) avail / 1073741824.0);
+        snprintf(err, (size_t) err_len, "Not enough memory for the %s (needs about %.1f GB, %.1f GB free). %s", what,
+                 (double) need / 1073741824.0, (double) avail / 1073741824.0, hint);
     }
     fprintf(stderr, "[Signature] memory guard: %s needs ~%.0f MB, %.0f MB available\n", what,
             (double) need / 1048576.0, (double) avail / 1048576.0);
@@ -368,8 +371,8 @@ int ace_engine_generate(ace_engine *             e,
     vb.on = e->opts.verbose != 0;
     if (vb.on) {
         fprintf(stderr, "[Signature] ---- new job ----\n");
-        fprintf(stderr, "[Signature] options: zero_copy=%d low_memory=%d cpu=%d\n", e->opts.zero_copy, e->opts.low_memory,
-                e->opts.use_cpu);
+        fprintf(stderr, "[Signature] options: zero_copy=%d low_memory=%d cpu=%d stream_layers=%d\n", e->opts.zero_copy,
+                e->opts.low_memory, e->opts.use_cpu, e->opts.stream_layers);
         fprintf(stderr, "[Signature] models: lm=%s\n[Signature]         text=%s\n[Signature]         dit=%s\n"
                         "[Signature]         vae=%s\n[Signature]         adapter=%s (scale %.2f)\n",
                 m->lm_path ? m->lm_path : "(none)", m->text_enc_path, m->dit_path, m->vae_path,
@@ -428,7 +431,8 @@ int ace_engine_generate(ace_engine *             e,
             lp.use_batch_cfg = false;  // run cond/uncond one after another: half the activations
         }
 
-        if (!fits(m->lm_path, e->opts.zero_copy != 0, err, err_len, "songwriter")) {
+        if (!fits_need(module_need(m->lm_path, low, false), err, err_len, "songwriter",
+                       "Pick the smaller songwriter, turn the songwriter off, or close other apps.")) {
             return -1;
         }
         AceLm * lmctx = ace_lm_load(e->store, &lp);
@@ -526,7 +530,21 @@ int ace_engine_generate(ace_engine *             e,
         sp.vae_chunk = duration > 40.0f ? 256 : 512;
     }
 
-    if (!fits(m->dit_path, e->opts.zero_copy != 0, err, err_len, "music model")) {
+    // Layer streaming: forced on, or automatic when the whole model won't fit.
+    bool stream = e->opts.stream_layers == 1;
+    if (e->opts.stream_layers == 2 && !stream) {
+        uint64_t avail = available_memory();
+        stream         = avail != 0 && module_need(m->dit_path, low, false) > avail;
+        if (stream) {
+            fprintf(stderr, "[Signature] music model doesn't fit (%.0f MB free): streaming layers from storage\n",
+                    (double) avail / 1048576.0);
+        }
+    }
+    g_wctx_stream = stream;
+    if (!fits_need(module_need(m->dit_path, low, stream), err, err_len, "music model",
+                   stream ? "Pick a smaller size (Compact) or close other apps."
+                          : "Pick a smaller size, turn on Low memory (slow) in Settings, or close other apps.")) {
+        g_wctx_stream = false;
         return -1;
     }
     AceSynth * synth = ace_synth_load(e->store, &sp);
@@ -592,6 +610,7 @@ int ace_engine_generate(ace_engine *             e,
 
     if (info_out) {
         memset(info_out, 0, sizeof(*info_out));
+        info_out->streamed  = stream ? 1 : 0;
         info_out->seed_used = planned.seed;
         info_out->bpm       = planned.bpm;
         info_out->duration  = duration;

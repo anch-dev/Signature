@@ -37,6 +37,10 @@ struct ModelPickerSheet: View {
                                                 .font(.caption).foregroundStyle(Theme.muted)
                                         }
                                         Spacer()
+                                        if let f = m.file(q) {
+                                            let fit = models.fit(f, music: true)
+                                            if fit != .good { FitBadge(fit: fit) }
+                                        }
                                         if models.musicID == m.id && models.musicQuant == q {
                                             Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.accent)
                                         }
@@ -188,14 +192,24 @@ struct ModelsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 summary
+                RecommendedCard()
                 ReadinessCard()
                 VStack(alignment: .leading, spacing: 10) {
                     SectionLabel("Music models")
-                    ForEach(Catalog.music) { m in musicRow(m) }
+                    ForEach(Catalog.music.filter { !visible($0.quants.compactMap($0.file), music: true).isEmpty }) { m in
+                        musicRow(m)
+                    }
+                    slowToggle
                 }
                 VStack(alignment: .leading, spacing: 10) {
                     SectionLabel("Songwriter")
-                    ForEach(Catalog.songwriters) { s in songwriterRow(s) }
+                    ForEach(Catalog.songwriters.filter { !visible($0.quants.compactMap($0.file), music: false).isEmpty }) { s in
+                        songwriterRow(s)
+                    }
+                }
+                if hiddenCount > 0 {
+                    Text("\(hiddenCount) sizes are hidden because they need more memory than iOS gives Signature on this iPhone (about \(String(format: "%.1f", Device.budgetGB)) GB). They can run on your PC.")
+                        .font(.caption).foregroundStyle(Theme.faint)
                 }
                 VStack(alignment: .leading, spacing: 10) {
                     SectionLabel("Always needed")
@@ -230,6 +244,44 @@ struct ModelsView: View {
         .navigationBarTitleDisplayMode(.inline)
     }
 
+    /// Files worth showing: those that fit, slow-mode ones if asked, and anything already downloaded.
+    private func visible(_ files: [ModelFile], music: Bool) -> [ModelFile] {
+        files.filter { f in
+            if models.isInstalled(f) || models.progress[f.id] != nil { return true }
+            let fit = models.fit(f, music: music)
+            return fit.fitsNormally || (fit == .streamed && models.showSlowModels)
+        }
+    }
+
+    private var allCatalogFiles: [(ModelFile, Bool)] {
+        Catalog.music.flatMap { m in m.quants.compactMap(m.file).map { ($0, true) } }
+            + Catalog.songwriters.flatMap { s in s.quants.compactMap(s.file).map { ($0, false) } }
+    }
+
+    private var hiddenCount: Int {
+        allCatalogFiles.filter { f, music in
+            !models.isInstalled(f) && models.fit(f, music: music) == .tooBig
+        }.count
+    }
+
+    private var slowCount: Int {
+        allCatalogFiles.filter { f, music in music && !models.isInstalled(f) && models.fit(f, music: true) == .streamed }.count
+    }
+
+    @ViewBuilder private var slowToggle: some View {
+        if slowCount > 0 {
+            Toggle(isOn: $models.showSlowModels) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Show bigger models (\(slowCount))").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                    Text("Too big to load whole here, but they run in Low memory mode: one layer at a time, read from storage. Expect songs to take several times longer.")
+                        .font(.caption).foregroundStyle(Theme.muted)
+                }
+            }
+            .tint(Theme.accent)
+            .card(padding: 12)
+        }
+    }
+
     private var summary: some View {
         HStack(spacing: 12) {
             stat("On this iPhone", ModelManager.format(models.usedBytes))
@@ -262,8 +314,8 @@ struct ModelsView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(m.quants) { q in
-                        if let f = m.file(q) {
-                            quantChip(f, label: q.label, selected: models.musicID == m.id && models.musicQuant == q) {
+                        if let f = m.file(q), visible([f], music: true).count == 1 {
+                            quantChip(f, label: q.label, music: true, selected: models.musicID == m.id && models.musicQuant == q) {
                                 models.select(m, q)
                             }
                         }
@@ -287,7 +339,7 @@ struct ModelsView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(s.quants) { q in
-                        if let f = s.file(q) {
+                        if let f = s.file(q), visible([f], music: false).count == 1 {
                             quantChip(f, label: q.label, selected: models.songwriterID == s.id && models.songwriterQuant == q) {
                                 models.songwriterID = s.id
                                 models.songwriterQuant = q
@@ -314,11 +366,11 @@ struct ModelsView: View {
     }
 
     /// One downloadable file: tap to download / select, long-press to delete.
-    private func quantChip(_ f: ModelFile, label: String, selected: Bool, showSize: Bool = true,
+    private func quantChip(_ f: ModelFile, label: String, music: Bool = false, selected: Bool, showSize: Bool = true,
                            onSelect: @escaping () -> Void) -> some View {
         let installed = models.isInstalled(f)
         let p = models.progress[f.id]
-        let fit = Device.fit(bytes: f.bytes)
+        let fit = models.fit(f, music: music)
         return Button {
             if installed { onSelect() } else if p != nil { models.cancel(f) } else { models.download(f) }
         } label: {
@@ -333,7 +385,7 @@ struct ModelsView: View {
                 } else {
                     HStack(spacing: 5) {
                         if showSize { Text(ModelManager.format(f.bytes)).font(.caption2) }
-                        if !installed { FitBadge(fit: fit) }
+                        if !installed || fit == .streamed || fit == .tooBig { FitBadge(fit: fit) }
                     }
                 }
                 if let e = models.errors[f.id] {
@@ -386,10 +438,13 @@ struct SettingsView: View {
                         Text("CPU").tag(true)
                     }
                     Toggle("Map models from storage", isOn: $models.zeroCopy)
+                    Picker("Low memory (slow)", selection: $models.streamMode) {
+                        ForEach(StreamMode.allCases) { Text($0.title).tag($0) }
+                    }
                 } header: {
                     Text("Performance")
                 } footer: {
-                    Text("Lite uses less memory (shorter songs, smaller working buffers) and turns on automatically when iOS gives Signature under 3 GB, as on 4 GB iPhones. GPU is fastest; CPU uses the same memory but is slower. Mapping reads model weights straight from storage instead of copying them into memory. Leave it on unless songs fail.")
+                    Text("Lite uses less memory (shorter songs, smaller working buffers) and turns on automatically when iOS gives Signature under 3 GB, as on 4 GB iPhones. GPU is fastest; CPU uses the same memory but is slower. Mapping reads model weights straight from storage instead of copying them into memory. Leave it on unless songs fail.\n\nLow memory streams the music model from storage one layer at a time, like ComfyUI's low-VRAM offload: models bigger than this iPhone's memory can still run, several times slower. "When needed" only does it for models that don't fit.")
                 }
 
                 Section {
@@ -548,5 +603,45 @@ struct FilesOnDiskView: View {
             models.refresh()
             files = models.filesOnDisk()
         }
+    }
+}
+
+/// The setup picked for this phone's memory, one tap to use it.
+struct RecommendedCard: View {
+    @EnvironmentObject var models: ModelManager
+
+    var body: some View {
+        let r = Device.recommendation
+        let files = models.recommendedFiles
+        let missing = files.filter { !models.isInstalled($0) }
+        let bytes = missing.reduce(Int64(0)) { $0 + $1.bytes }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "sparkles").foregroundStyle(Theme.accent)
+                Text("Recommended for this \(UIDevice.current.model)").font(.headline).foregroundStyle(Theme.text)
+                Spacer()
+                if models.isRecommendedSelected {
+                    Text("In use").font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\(r.music.name) · \(r.musicQuant.label)").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                Text("\(r.songwriter.name) · \(r.songwriterQuant.label)\(r.lite ? " · Lite" : "")")
+                    .font(.subheadline).foregroundStyle(Theme.text)
+                Text(r.why).font(.caption).foregroundStyle(Theme.muted)
+            }
+            if !models.isRecommendedSelected || !missing.isEmpty {
+                Button {
+                    models.applyRecommendation()
+                    missing.forEach(models.download)
+                } label: {
+                    Text(missing.isEmpty ? "Use this setup" : "Use this setup · download \(ModelManager.format(bytes))")
+                        .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
+                        .background(Capsule().fill(Color.white)).foregroundStyle(.black)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .card()
     }
 }

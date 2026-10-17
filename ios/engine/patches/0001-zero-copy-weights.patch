@@ -1,3 +1,413 @@
+diff --git a/src/dit-sampler.h b/src/dit-sampler.h
+index 15f32a2..3e7750a 100644
+--- a/src/dit-sampler.h
++++ b/src/dit-sampler.h
+@@ -7,6 +7,7 @@
+ #include "debug.h"
+ #include "dit-graph.h"
+ #include "dit.h"
++#include "dit-stream.h"
+ #include "dwt-haar.h"
+ #include "solvers/solver-registry.h"
+ #include "static-graph.h"
+@@ -130,6 +131,14 @@ static void apg_forward(const float *       pred_cond,
+ // enc_hidden:       [enc_S * H_enc * N]  per-batch encoder outputs (caller-stacked)
+ // schedule:         array of num_steps timestep values
+ // output:           [N * T * Oc]  generated latents (caller-allocated)
++// One DiT forward: the static graph, or the layer-streamed path.
++static bool dit_forward(StaticGraph * sg, DiTGGML * model, struct ggml_cgraph * gf, DiTStream * stream) {
++    if (stream) {
++        return dit_stream_compute(stream, model);
++    }
++    return static_graph_compute(sg, model->backend, model->sched, gf) == GGML_STATUS_SUCCESS;
++}
++
+ static int dit_ggml_generate(DiTGGML *           model,
+                              const float *       noise,
+                              const float *       context_latents,
+@@ -194,7 +203,18 @@ static int dit_ggml_generate(DiTGGML *           model,
+ 
+     struct ggml_tensor * t_input  = NULL;
+     struct ggml_tensor * t_output = NULL;
+-    struct ggml_cgraph * gf       = dit_ggml_build_graph(model, ctx, T, enc_S, N_graph, &t_input, &t_output);
++    struct ggml_cgraph * gf       = NULL;
++    // Layer streaming (Signature patch): per-layer graphs, weights wrapped on demand.
++    DiTStream *          stream   = NULL;
++    if (model->wctx.stream) {
++        stream = dit_stream_init(model, T, enc_S, N_graph, &gf, &t_input, &t_output);
++        if (!stream) {
++            ggml_free(ctx);
++            return -1;
++        }
++    } else {
++        gf = dit_ggml_build_graph(model, ctx, T, enc_S, N_graph, &t_input, &t_output);
++    }
+ 
+     fprintf(stderr, "[DiT] Graph: %d nodes\n", ggml_graph_n_nodes(gf));
+ 
+@@ -209,7 +229,9 @@ static int dit_ggml_generate(DiTGGML *           model,
+     // more aggressive aliasing, causing batch sample 1+ to produce noise.
+     StaticGraph dit_graph;
+     ggml_backend_sched_reset(model->sched);
+-    if (model->backend != model->cpu_backend) {
++    if (stream) {
++        dit_graph.direct = true;  // persistent inputs: set once, never aliased
++    } else if (model->backend != model->cpu_backend) {
+         const char * input_names[] = {
+             "enc_hidden", "input_latents", "t", "t_r", "positions", "sa_mask_sw", "ca_mask"
+         };
+@@ -235,7 +257,7 @@ static int dit_ggml_generate(DiTGGML *           model,
+             }
+         }
+     }
+-    if (!static_graph_alloc(&dit_graph, model->backend, model->sched, gf)) {
++    if (!stream && !static_graph_alloc(&dit_graph, model->backend, model->sched, gf)) {
+         fprintf(stderr, "[DiT] FATAL: failed to allocate graph\n");
+         ggml_free(ctx);
+         return -1;
+@@ -416,6 +438,7 @@ static int dit_ggml_generate(DiTGGML *           model,
+         if (cancel && cancel(cancel_data)) {
+             fprintf(stderr, "[DiT] Cancelled at step %d/%d\n", step, num_steps);
+             static_graph_release(&dit_graph, model->sched);
++            dit_stream_free(stream);
+             ggml_free(ctx);
+             return -1;
+         }
+@@ -502,7 +525,12 @@ static int dit_ggml_generate(DiTGGML *           model,
+         ggml_backend_tensor_set(t_input, input_buf.data(), 0, in_ch * T * N_graph * sizeof(float));
+ 
+         // Conditional forward pass
+-        static_graph_compute(&dit_graph, model->backend, model->sched, gf);
++        if (!dit_forward(&dit_graph, model, gf, stream)) {
++            static_graph_release(&dit_graph, model->sched);
++            dit_stream_free(stream);
++            ggml_free(ctx);
++            return -1;
++        }
+ 
+         // dump intermediate tensors on step 0 (sample 0 only for batch)
+         if (step == 0 && dbg && dbg->enabled) {
+@@ -597,7 +625,12 @@ static int dit_ggml_generate(DiTGGML *           model,
+                                         (size_t) enc_S * (size_t) S * (size_t) N * sizeof(uint16_t));
+             }
+ 
+-            static_graph_compute(&dit_graph, model->backend, model->sched, gf);
++            if (!dit_forward(&dit_graph, model, gf, stream)) {
++                static_graph_release(&dit_graph, model->sched);
++                dit_stream_free(stream);
++                ggml_free(ctx);
++                return -1;
++            }
+             ggml_backend_tensor_get(t_output, vt_uncond.data(), 0, n_total * sizeof(float));
+ 
+             if (dbg && dbg->enabled) {
+@@ -733,6 +766,7 @@ static int dit_ggml_generate(DiTGGML *           model,
+     }
+ 
+     static_graph_release(&dit_graph, model->sched);
++    dit_stream_free(stream);
+     ggml_free(ctx);
+     return 0;
+ }
+diff --git a/src/dit-stream.h b/src/dit-stream.h
+new file mode 100644
+index 0000000..f364902
+--- /dev/null
++++ b/src/dit-stream.h
+@@ -0,0 +1,276 @@
++#pragma once
++// dit-stream.h: layer-streamed DiT forward (Signature patch).
++//
++// The regular forward is one big graph over all transformer layers, so every
++// layer's weights must be resident at once. In streaming mode the forward is
++// split into a prologue graph (timestep embeddings, proj_in, condition
++// embedder), one graph per transformer layer, and an epilogue graph (AdaLN +
++// proj_out). Before each layer graph runs, that layer's weights are wrapped
++// straight from a read-only mmap of the GGUF; afterwards the wrap is dropped,
++// so at most one layer is resident. The pages are clean and file-backed: the
++// OS keeps them cached when there is room and re-reads them from storage when
++// there isn't. Like ComfyUI's low-VRAM offload, but the tier below is storage.
++//
++// Activations between graphs live in a small persistent backend buffer. The
++// sampler addresses the inputs by name through a dummy graph, so it needs no
++// changes beyond calling dit_stream_compute in place of the static graph.
++
++#include "dit-graph.h"
++#include "dit.h"
++#include "static-graph.h"
++
++#include <cstdio>
++#include <vector>
++
++struct DiTStream {
++    struct ggml_context * pctx = nullptr;  // persistent tensors (no_alloc, backend buffer)
++    ggml_backend_buffer_t pbuf = nullptr;
++    struct ggml_context * gctx = nullptr;  // dummy lookup graph
++    struct ggml_cgraph *  lookup = nullptr;
++    ggml_gallocr_t        galloc = nullptr;
++
++    int T = 0, enc_S = 0, N = 0, S = 0;
++
++    // inputs (named like the full graph's, so the sampler finds them)
++    struct ggml_tensor * input = nullptr, *enc_hidden = nullptr, *t = nullptr, *t_r = nullptr;
++    struct ggml_tensor * positions = nullptr, *sa_mask_sw = nullptr, *ca_mask = nullptr;
++    // carried between graphs
++    struct ggml_tensor * temb = nullptr, *tproj = nullptr, *enc = nullptr;
++    struct ggml_tensor * hidden[2] = { nullptr, nullptr };
++    struct ggml_tensor * velocity = nullptr;
++
++    std::vector<uint8_t> scratch;  // graph-building context memory
++    int                  passes = 0;
++};
++
++static struct ggml_context * dit_stream_scratch(DiTStream * st) {
++    struct ggml_init_params p = { st->scratch.size(), st->scratch.data(), true };
++    return ggml_init(p);
++}
++
++// Compute one graph on the model backend, falling back to the scheduler when
++// the backend lacks an op (same policy as the static graph path).
++static bool dit_stream_run(DiTStream * st, DiTGGML * m, struct ggml_cgraph * gf) {
++    if (static_graph_backend_supports(m->backend, gf)) {
++        if (!st->galloc) {
++            st->galloc = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m->backend));
++        }
++        if (!ggml_gallocr_alloc_graph(st->galloc, gf)) {
++            fprintf(stderr, "[Stream] FATAL: graph allocation failed\n");
++            return false;
++        }
++        return ggml_backend_graph_compute(m->backend, gf) == GGML_STATUS_SUCCESS;
++    }
++    ggml_backend_sched_reset(m->sched);
++    if (!ggml_backend_sched_alloc_graph(m->sched, gf)) {
++        fprintf(stderr, "[Stream] FATAL: sched allocation failed\n");
++        return false;
++    }
++    bool ok = ggml_backend_sched_graph_compute(m->sched, gf) == GGML_STATUS_SUCCESS;
++    ggml_backend_sched_reset(m->sched);
++    return ok;
++}
++
++static struct ggml_tensor * dit_stream_input(struct ggml_context * ctx,
++                                             enum ggml_type        type,
++                                             int64_t               a,
++                                             int64_t               b,
++                                             int64_t               c,
++                                             int64_t               d,
++                                             int                   nd,
++                                             const char *          name) {
++    struct ggml_tensor * t = nd == 1 ? ggml_new_tensor_1d(ctx, type, a) :
++                             nd == 3 ? ggml_new_tensor_3d(ctx, type, a, b, c) :
++                                       ggml_new_tensor_4d(ctx, type, a, b, c, d);
++    ggml_set_name(t, name);
++    ggml_set_input(t);
++    return t;
++}
++
++// Prologue: temb/tproj, proj_in, condition embedder -> st->{temb,tproj,hidden[0],enc}.
++static struct ggml_cgraph * dit_stream_prologue(DiTStream * st, DiTGGML * m, struct ggml_context * ctx,
++                                                bool write) {
++    DiTGGMLConfig & c  = m->cfg;
++    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx, 2048, false);
++
++    struct ggml_tensor * tproj_t;
++    struct ggml_tensor * temb_t = dit_ggml_build_temb(ctx, &m->time_embed, st->t, &tproj_t, "_t");
++    struct ggml_tensor * tproj_r;
++    struct ggml_tensor * t_diff = ggml_sub(ctx, st->t, st->t_r);
++    struct ggml_tensor * temb_r = dit_ggml_build_temb(ctx, &m->time_embed_r, t_diff, &tproj_r, "_r");
++    struct ggml_tensor * temb   = ggml_add(ctx, temb_t, temb_r);
++    struct ggml_tensor * tproj  = ggml_add(ctx, tproj_t, tproj_r);
++
++    struct ggml_tensor * patched = ggml_reshape_3d(ctx, st->input, c.in_channels * c.patch_size, st->S, st->N);
++    struct ggml_tensor * hidden  = dit_ggml_linear_bias(ctx, m->proj_in_w, m->proj_in_b, patched);
++    struct ggml_tensor * enc     = dit_ggml_linear_bias(ctx, m->cond_emb_w, m->cond_emb_b, st->enc_hidden);
++
++    if (!write) {
++        // Shape probe: create the carried tensors with the shapes ggml derived.
++        st->temb      = ggml_new_tensor(st->pctx, GGML_TYPE_F32, ggml_n_dims(temb), temb->ne);
++        st->tproj     = ggml_new_tensor(st->pctx, GGML_TYPE_F32, ggml_n_dims(tproj), tproj->ne);
++        st->hidden[0] = ggml_new_tensor(st->pctx, GGML_TYPE_F32, 3, hidden->ne);
++        st->hidden[1] = ggml_new_tensor(st->pctx, GGML_TYPE_F32, 3, hidden->ne);
++        st->enc       = ggml_new_tensor(st->pctx, GGML_TYPE_F32, 3, enc->ne);
++        return nullptr;
++    }
++    ggml_build_forward_expand(gf, ggml_cpy(ctx, temb, st->temb));
++    ggml_build_forward_expand(gf, ggml_cpy(ctx, tproj, st->tproj));
++    ggml_build_forward_expand(gf, ggml_cpy(ctx, hidden, st->hidden[0]));
++    ggml_build_forward_expand(gf, ggml_cpy(ctx, enc, st->enc));
++    return gf;
++}
++
++static struct ggml_cgraph * dit_stream_epilogue(DiTStream * st, DiTGGML * m, struct ggml_context * ctx,
++                                                struct ggml_tensor * hidden) {
++    DiTGGMLConfig & c  = m->cfg;
++    int             H  = c.hidden_size;
++    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx, 512, false);
++
++    struct ggml_tensor * oss = m->out_scale_shift;
++    if (oss->type != GGML_TYPE_F32) {
++        oss = ggml_cast(ctx, oss, GGML_TYPE_F32);
++    }
++    struct ggml_tensor * oss_flat  = ggml_reshape_1d(ctx, oss, 2 * H);
++    size_t               Hb        = H * sizeof(float);
++    struct ggml_tensor * out_shift = ggml_add(ctx, ggml_view_1d(ctx, oss_flat, H, 0), st->temb);
++    struct ggml_tensor * out_scale = ggml_add(ctx, ggml_view_1d(ctx, oss_flat, H, Hb), st->temb);
++
++    struct ggml_tensor * norm_out = dit_ggml_rms_norm_weighted(ctx, hidden, m->norm_out, c.rms_norm_eps);
++    norm_out                      = dit_ggml_adaln(ctx, norm_out, out_scale, out_shift, m->scalar_one);
++    struct ggml_tensor * output   = dit_ggml_linear_bias(ctx, m->proj_out_w, m->proj_out_b, norm_out);
++    output                        = ggml_reshape_3d(ctx, output, c.out_channels, st->T, st->N);
++    ggml_build_forward_expand(gf, ggml_cpy(ctx, output, st->velocity));
++    return gf;
++}
++
++static void dit_stream_free(DiTStream * st) {
++    if (!st) {
++        return;
++    }
++    if (st->galloc) {
++        ggml_gallocr_free(st->galloc);
++    }
++    if (st->pbuf) {
++        ggml_backend_buffer_free(st->pbuf);
++    }
++    if (st->gctx) {
++        ggml_free(st->gctx);
++    }
++    if (st->pctx) {
++        ggml_free(st->pctx);
++    }
++    delete st;
++}
++
++// Allocate persistent tensors. Returns a lookup graph whose nodes are the
++// named inputs/outputs (never computed), plus input/output pointers.
++static DiTStream * dit_stream_init(DiTGGML *             m,
++                                   int                   T,
++                                   int                   enc_S,
++                                   int                   N,
++                                   struct ggml_cgraph ** p_lookup,
++                                   struct ggml_tensor ** p_input,
++                                   struct ggml_tensor ** p_output) {
++    DiTGGMLConfig & c  = m->cfg;
++    DiTStream *     st = new DiTStream();
++    st->T = T, st->enc_S = enc_S, st->N = N, st->S = T / c.patch_size;
++    st->scratch.resize(ggml_tensor_overhead() * 4096 + ggml_graph_overhead_custom(4096, false));
++
++    struct ggml_init_params pp = { ggml_tensor_overhead() * 64, nullptr, true };
++    st->pctx                   = ggml_init(pp);
++
++    int S      = st->S;
++    int H_enc  = (int) m->cond_emb_w->ne[0];
++    st->input      = dit_stream_input(st->pctx, GGML_TYPE_F32, c.in_channels, T, N, 1, 3, "input_latents");
++    st->enc_hidden = dit_stream_input(st->pctx, GGML_TYPE_F32, H_enc, enc_S, N, 1, 3, "enc_hidden");
++    st->t          = dit_stream_input(st->pctx, GGML_TYPE_F32, 1, 1, 1, 1, 1, "t");
++    st->t_r        = dit_stream_input(st->pctx, GGML_TYPE_F32, 1, 1, 1, 1, 1, "t_r");
++    st->positions  = dit_stream_input(st->pctx, GGML_TYPE_I32, (int64_t) S * N, 1, 1, 1, 1, "positions");
++    st->sa_mask_sw = dit_stream_input(st->pctx, GGML_TYPE_F16, S, S, 1, N, 4, "sa_mask_sw");
++    st->ca_mask    = dit_stream_input(st->pctx, GGML_TYPE_F16, enc_S, S, 1, N, 4, "ca_mask");
++    st->velocity   = ggml_new_tensor_3d(st->pctx, GGML_TYPE_F32, c.out_channels, T, N);
++    ggml_set_name(st->velocity, "velocity");
++
++    // Shape probe for the carried activations.
++    {
++        struct ggml_context * ctx = dit_stream_scratch(st);
++        dit_stream_prologue(st, m, ctx, false);
++        ggml_free(ctx);
++    }
++    st->pbuf = ggml_backend_alloc_ctx_tensors(st->pctx, m->backend);
++    if (!st->pbuf) {
++        fprintf(stderr, "[Stream] FATAL: cannot allocate activation buffer\n");
++        dit_stream_free(st);
++        return nullptr;
++    }
++
++    struct ggml_init_params gp = { ggml_graph_overhead_custom(64, false) + 1024, nullptr, true };
++    st->gctx                   = ggml_init(gp);
++    st->lookup                 = ggml_new_graph_custom(st->gctx, 64, false);
++    struct ggml_tensor * named[] = { st->input,     st->enc_hidden, st->t,       st->t_r,
++                                     st->positions, st->sa_mask_sw, st->ca_mask, st->velocity };
++    for (struct ggml_tensor * t : named) {
++        ggml_graph_add_node(st->lookup, t);
++    }
++    *p_lookup = st->lookup;
++    *p_input  = st->input;
++    *p_output = st->velocity;
++
++    fprintf(stderr, "[Stream] DiT layer streaming on: %d layers, activations %.1f MB\n", c.n_layers,
++            (double) ggml_backend_buffer_get_size(st->pbuf) / 1048576.0);
++    return st;
++}
++
++// One full DiT forward, layer by layer.
++static bool dit_stream_compute(DiTStream * st, DiTGGML * m) {
++    DiTGGMLConfig & c = m->cfg;
++    Timer           timer;
++
++    {
++        struct ggml_context * ctx = dit_stream_scratch(st);
++        bool ok = dit_stream_run(st, m, dit_stream_prologue(st, m, ctx, true));
++        ggml_free(ctx);
++        if (!ok) {
++            return false;
++        }
++    }
++
++    int cur = 0;
++    wctx_stream_prefetch(&m->wctx, 0);
++    for (int i = 0; i < c.n_layers; i++) {
++        if (!wctx_stream_acquire(&m->wctx, i)) {
++            return false;
++        }
++        wctx_stream_prefetch(&m->wctx, i + 1);  // read ahead while this layer runs
++
++        struct ggml_context * ctx = dit_stream_scratch(st);
++        struct ggml_cgraph *  gf  = ggml_new_graph_custom(ctx, 4096, false);
++        struct ggml_tensor *  sa  = (m->layers[i].layer_type == 0) ? st->sa_mask_sw : nullptr;
++        struct ggml_tensor *  out = dit_ggml_build_layer(ctx, m, i, st->hidden[cur], st->tproj, st->enc,
++                                                         st->positions, sa, st->ca_mask, st->S, st->enc_S, st->N);
++        ggml_build_forward_expand(gf, ggml_cpy(ctx, out, st->hidden[cur ^ 1]));
++        bool ok = dit_stream_run(st, m, gf);
++        ggml_backend_synchronize(m->backend);
++        ggml_free(ctx);
++        wctx_stream_release(&m->wctx, i);
++        if (!ok) {
++            return false;
++        }
++        cur ^= 1;
++    }
++
++    {
++        struct ggml_context * ctx = dit_stream_scratch(st);
++        bool ok = dit_stream_run(st, m, dit_stream_epilogue(st, m, ctx, st->hidden[cur]));
++        ggml_free(ctx);
++        if (!ok) {
++            return false;
++        }
++    }
++    if (st->passes++ == 0) {
++        fprintf(stderr, "[Stream] first pass %.0f ms (%.1f MB read)\n", timer.ms(),
++                (double) m->wctx.stream->streamed_bytes / 1048576.0);
++    }
++    return true;
++}
+diff --git a/src/dit.h b/src/dit.h
+index 54f7f8f..4ea30d7 100644
+--- a/src/dit.h
++++ b/src/dit.h
+@@ -429,6 +429,12 @@ static bool dit_ggml_load(DiTGGML *    m,
+         fprintf(stderr, "[Adapter] Merge time: %.1f ms\n", adapter_timer.ms());
+     }
+ 
++#ifndef _WIN32
++    // Layer streaming: leave the transformer layers on storage (Signature patch)
++    if (g_wctx_stream) {
++        wctx_stream_prepare(&m->wctx, m->backend, "decoder.layers.", cfg.n_layers);
++    }
++#endif
+     // Allocate backend buffer and copy weights
+     if (!wctx_alloc(&m->wctx, m->backend)) {
+         gf_close(&gf);
 diff --git a/src/gguf-weights.h b/src/gguf-weights.h
 index 6adc2b0..99ff6b6 100644
 --- a/src/gguf-weights.h
@@ -41,15 +451,17 @@ index 6adc2b0..99ff6b6 100644
      }
      if (a_src->ne[0] != b_src->ne[0] || a_src->type != b_src->type) {
 diff --git a/src/weight-ctx.h b/src/weight-ctx.h
-index e43f573..7c95da4 100644
+index e43f573..d54b153 100644
 --- a/src/weight-ctx.h
 +++ b/src/weight-ctx.h
-@@ -14,10 +14,62 @@
+@@ -14,10 +14,89 @@
  #include "ggml.h"
  
  #include <cstddef>
 +#include <cstdint>
  #include <cstdio>
++#include <cstdlib>
++#include <cstring>
  #include <memory>
 +#include <mutex>
 +#include <string>
@@ -78,6 +490,31 @@ index e43f573..7c95da4 100644
 +// Skip QKV / gate+up fusion at load time. Fused tensors are new buffers that
 +// can't be mapped from the file, so mapping mode turns fusion off.
 +inline bool g_wctx_no_fuse = false;
++// Layer streaming (Signature patch): transformer layers are not loaded at all.
++// Each layer's weights are wrapped straight from a read-only mmap of the file
++// only while that layer runs, then released, so at most one layer is resident.
++// Slow (the model is re-read from storage every step) but needs a fraction of
++// the memory. Only loaders that call wctx_stream_prepare use it (the DiT).
++inline bool g_wctx_stream = false;
++
++struct WctxStreamGroup {
++    std::vector<struct ggml_tensor *> tensors;
++    std::vector<size_t>               offs;  // tensor offset inside [lo, lo+span)
++    size_t                            lo    = 0;
++    size_t                            span  = 0;
++    size_t                            bytes = 0;
++    size_t                            max_tensor = 0;
++    ggml_backend_buffer_t             buf   = nullptr;
++};
++
++struct WctxStream {
++    uint8_t *                    map      = nullptr;
++    size_t                       map_size = 0;
++    ggml_backend_dev_t           dev      = nullptr;
++    std::vector<WctxStreamGroup> groups;
++    size_t                       streamed_bytes = 0;
++    size_t                       read_bytes     = 0;  // running total, for logs
++};
 +
 +struct WctxMapping {
 +    const uint8_t * base;
@@ -107,7 +544,7 @@ index e43f573..7c95da4 100644
  struct WeightCtx {
      struct ggml_context * ctx;
      ggml_backend_buffer_t buffer;
-@@ -35,6 +87,15 @@ struct WeightCtx {
+@@ -35,6 +114,16 @@ struct WeightCtx {
      // unique_ptr keeps the data address stable even when the outer vector grows,
      // so src pointers stored in pending stay valid across staging.push_back().
      std::vector<std::unique_ptr<float[]>> staging;
@@ -120,18 +557,24 @@ index e43f573..7c95da4 100644
 +    std::vector<ggml_backend_buffer_t> mapped_buffers;
 +    std::vector<OwnedMap>              owned_maps;
 +    size_t                             mapped_bytes = 0;
++    WctxStream *                       stream       = nullptr;
  };
  
  static void wctx_init(WeightCtx * wctx, int n_tensors) {
-@@ -48,24 +109,135 @@ static void wctx_init(WeightCtx * wctx, int n_tensors) {
+@@ -48,24 +137,310 @@ static void wctx_init(WeightCtx * wctx, int n_tensors) {
      wctx->buffer = NULL;
      wctx->pending.clear();
      wctx->pending.reserve(n_tensors);
 +    wctx->mapped_buffers.clear();
 +    wctx->owned_maps.clear();
 +    wctx->mapped_bytes = 0;
-+}
-+
++    wctx->stream       = nullptr;
+ }
+ 
+-static bool wctx_alloc(WeightCtx * wctx, ggml_backend_t backend) {
+-    wctx->buffer = ggml_backend_alloc_ctx_tensors(wctx->ctx, backend);
+-    if (!wctx->buffer) {
+-        fprintf(stderr, "[WeightCtx] FATAL: failed to allocate backend buffer\n");
 +#ifndef _WIN32
 +// Place eligible pending tensors directly on an mmap of their source file.
 +static void wctx_map_weights(WeightCtx * wctx, ggml_backend_t backend) {
@@ -220,19 +663,189 @@ index e43f573..7c95da4 100644
 +        wctx->owned_maps.push_back({ ptr, span });
 +        wctx->mapped_bytes += bytes;
 +    }
- }
++}
 +#endif
- 
- static bool wctx_alloc(WeightCtx * wctx, ggml_backend_t backend) {
--    wctx->buffer = ggml_backend_alloc_ctx_tensors(wctx->ctx, backend);
--    if (!wctx->buffer) {
--        fprintf(stderr, "[WeightCtx] FATAL: failed to allocate backend buffer\n");
--        return false;
++
++#ifndef _WIN32
++// Defer every pending tensor named "<prefix><i>.*" (stored as-is in the file)
++// to on-demand streaming, grouped by i. Call before wctx_alloc.
++static bool wctx_stream_prepare(WeightCtx * wctx, ggml_backend_t backend, const char * prefix, int n_groups) {
++    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
++    if (!dev || n_groups <= 0) {
++        return false;
++    }
++    struct ggml_backend_dev_props props;
++    ggml_backend_dev_get_props(dev, &props);
++    if (!props.caps.buffer_from_host_ptr) {
++        fprintf(stderr, "[Stream] backend can't wrap host memory; streaming off\n");
+         return false;
+     }
+-    // Mark as weight buffer so ggml_backend_sched assigns ops to the correct
+-    // backend based on weight location (avoids fallback through expansion).
+-    ggml_backend_buffer_set_usage(wctx->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++    std::vector<WctxMapping> maps;
++    {
++        std::lock_guard<std::mutex> lock(wctx_map_mutex());
++        maps = wctx_maps();
++    }
++    const size_t plen = strlen(prefix);
++    for (const WctxMapping & m : maps) {
++        if (m.path.empty()) {
++            continue;
++        }
++        std::vector<std::vector<size_t>> idx(n_groups);
++        bool any = false;
++        for (size_t i = 0; i < wctx->pending.size(); i++) {
++            const auto &    pc  = wctx->pending[i];
++            const uint8_t * src = (const uint8_t *) pc.src;
++            if (pc.offset != 0 || pc.nbytes == 0 || pc.nbytes != ggml_nbytes(pc.tensor)) {
++                continue;
++            }
++            if (src < m.base || src + pc.nbytes > m.base + m.size) {
++                continue;  // converted / adapter-merged: stays resident
++            }
++            const char * name = ggml_get_name(pc.tensor);
++            if (strncmp(name, prefix, plen) != 0) {
++                continue;
++            }
++            int g = atoi(name + plen);
++            if (g < 0 || g >= n_groups) {
++                continue;
++            }
++            idx[g].push_back(i);
++            any = true;
++        }
++        if (!any) {
++            continue;
++        }
++        int fd = open(m.path.c_str(), O_RDONLY);
++        if (fd < 0) {
++            return false;
++        }
++        void * ptr = mmap(NULL, m.size, PROT_READ, MAP_SHARED, fd, 0);
++        close(fd);
++        if (ptr == MAP_FAILED) {
++            return false;
++        }
++        WctxStream * st = new WctxStream();
++        st->map         = (uint8_t *) ptr;
++        st->map_size    = m.size;
++        st->dev         = dev;
++        st->groups.resize(n_groups);
++        const size_t page = (size_t) sysconf(_SC_PAGESIZE);
++        for (int g = 0; g < n_groups; g++) {
++            WctxStreamGroup & gr = st->groups[g];
++            if (idx[g].empty()) {
++                continue;
++            }
++            size_t lo = SIZE_MAX, hi = 0;
++            for (size_t i : idx[g]) {
++                size_t off = (size_t) ((const uint8_t *) wctx->pending[i].src - m.base);
++                lo         = off < lo ? off : lo;
++                hi         = off + wctx->pending[i].nbytes > hi ? off + wctx->pending[i].nbytes : hi;
++            }
++            lo      = lo / page * page;
++            gr.lo   = lo;
++            gr.span = hi - lo;
++            for (size_t i : idx[g]) {
++                auto & pc = wctx->pending[i];
++                gr.tensors.push_back(pc.tensor);
++                gr.offs.push_back((size_t) ((const uint8_t *) pc.src - m.base) - lo);
++                gr.bytes += pc.nbytes;
++                gr.max_tensor = pc.nbytes > gr.max_tensor ? pc.nbytes : gr.max_tensor;
++                pc.nbytes     = 0;  // nothing to copy at load
++            }
++            st->streamed_bytes += gr.bytes;
++        }
++        wctx->stream = st;
++        fprintf(stderr, "[Stream] %d layers deferred, %.1f MB streamed per pass\n", n_groups,
++                (double) st->streamed_bytes / 1048576.0);
++        return true;
++    }
++    return false;
++}
++
++static void wctx_stream_prefetch(WeightCtx * wctx, int g) {
++    WctxStream * st = wctx->stream;
++    if (!st || g < 0 || g >= (int) st->groups.size() || st->groups[g].span == 0) {
++        return;
++    }
++    madvise(st->map + st->groups[g].lo, st->groups[g].span, MADV_WILLNEED);
++}
++
++// Make layer g's weights live. Returns false if the backend refused the wrap.
++static bool wctx_stream_acquire(WeightCtx * wctx, int g) {
++    WctxStream * st = wctx->stream;
++    if (!st || g < 0 || g >= (int) st->groups.size()) {
++        return true;
++    }
++    WctxStreamGroup & gr = st->groups[g];
++    if (gr.buf || gr.tensors.empty()) {
++        return true;
++    }
++    // Wrap the page-rounded span; stays inside the mapping (whole pages).
++    const size_t page = (size_t) sysconf(_SC_PAGESIZE);
++    size_t       span = (gr.span + page - 1) / page * page;
++    gr.buf            = ggml_backend_dev_buffer_from_host_ptr(st->dev, st->map + gr.lo, span, gr.max_tensor);
++    if (!gr.buf) {
++        fprintf(stderr, "[Stream] FATAL: could not wrap layer %d (%.1f MB)\n", g, (double) span / 1048576.0);
++        return false;
++    }
++    ggml_backend_buffer_set_usage(gr.buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++    for (size_t i = 0; i < gr.tensors.size(); i++) {
++        if (ggml_backend_tensor_alloc(gr.buf, gr.tensors[i], st->map + gr.lo + gr.offs[i]) != GGML_STATUS_SUCCESS) {
++            fprintf(stderr, "[Stream] FATAL: tensor bind failed in layer %d\n", g);
++            return false;
++        }
++    }
++    st->read_bytes += gr.bytes;
++    return true;
++}
++
++static void wctx_stream_release(WeightCtx * wctx, int g) {
++    WctxStream * st = wctx->stream;
++    if (!st || g < 0 || g >= (int) st->groups.size()) {
++        return;
++    }
++    WctxStreamGroup & gr = st->groups[g];
++    if (!gr.buf) {
++        return;
++    }
++    for (struct ggml_tensor * t : gr.tensors) {
++        t->data   = NULL;
++        t->buffer = NULL;
++    }
++    ggml_backend_buffer_free(gr.buf);
++    gr.buf = nullptr;
++}
++#endif
++
++#ifdef _WIN32
++static bool wctx_stream_prepare(WeightCtx *, ggml_backend_t, const char *, int) { return false; }
++static void wctx_stream_prefetch(WeightCtx *, int) {}
++static bool wctx_stream_acquire(WeightCtx *, int) { return true; }
++static void wctx_stream_release(WeightCtx *, int) {}
++#endif
++
++static bool wctx_alloc(WeightCtx * wctx, ggml_backend_t backend) {
 +#ifndef _WIN32
 +    if (g_wctx_zero_copy) {
 +        wctx_map_weights(wctx, backend);
 +    }
 +#endif
++    // Streamed tensors stay unallocated: park a dummy data pointer on them so
++    // the context allocator skips them, then clear it again.
++    std::vector<struct ggml_tensor *> deferred;
++    if (wctx->stream) {
++        for (auto & gr : wctx->stream->groups) {
++            for (struct ggml_tensor * t : gr.tensors) {
++                if (t->data == NULL) {
++                    t->data = (void *) (uintptr_t) 1;
++                    deferred.push_back(t);
++                }
++            }
++        }
++    }
 +    bool need_alloc = false;
 +    for (ggml_tensor * t = ggml_get_first_tensor(wctx->ctx); t; t = ggml_get_next_tensor(wctx->ctx, t)) {
 +        if (t->data == NULL && t->view_src == NULL) {
@@ -249,10 +862,10 @@ index e43f573..7c95da4 100644
 +        // Mark as weight buffer so ggml_backend_sched assigns ops to the correct
 +        // backend based on weight location (avoids fallback through expansion).
 +        ggml_backend_buffer_set_usage(wctx->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-     }
--    // Mark as weight buffer so ggml_backend_sched assigns ops to the correct
--    // backend based on weight location (avoids fallback through expansion).
--    ggml_backend_buffer_set_usage(wctx->buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++    }
++    for (struct ggml_tensor * t : deferred) {
++        t->data = NULL;
++    }
      size_t total = 0;
      for (auto & pc : wctx->pending) {
 +        if (pc.nbytes == 0) {
@@ -268,7 +881,7 @@ index e43f573..7c95da4 100644
      wctx->pending.clear();
      wctx->staging.clear();
      return true;
-@@ -75,6 +247,17 @@ static void wctx_free(WeightCtx * wctx) {
+@@ -75,6 +450,25 @@ static void wctx_free(WeightCtx * wctx) {
      if (wctx->buffer) {
          ggml_backend_buffer_free(wctx->buffer);
      }
@@ -280,9 +893,17 @@ index e43f573..7c95da4 100644
 +    for (auto & m : wctx->owned_maps) {
 +        munmap(m.ptr, m.size);
 +    }
-+#endif
 +    wctx->owned_maps.clear();
 +    wctx->mapped_bytes = 0;
++    if (wctx->stream) {
++        for (size_t g = 0; g < wctx->stream->groups.size(); g++) {
++            wctx_stream_release(wctx, (int) g);
++        }
++        munmap(wctx->stream->map, wctx->stream->map_size);
++        delete wctx->stream;
++        wctx->stream = nullptr;
++    }
++#endif
      if (wctx->ctx) {
          ggml_free(wctx->ctx);
      }

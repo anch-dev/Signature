@@ -13,6 +13,26 @@ enum PerformanceMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// Layer streaming for the music model (ComfyUI-style low-memory offload).
+enum StreamMode: String, CaseIterable, Identifiable {
+    case auto, always, never
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .auto: return "When needed"
+        case .always: return "Always"
+        case .never: return "Never"
+        }
+    }
+    var engineValue: Int32 {
+        switch self {
+        case .never: return 0
+        case .always: return 1
+        case .auto: return 2
+        }
+    }
+}
+
 /// Which models are selected, what's installed, downloads, and engine settings.
 @MainActor
 final class ModelManager: ObservableObject {
@@ -25,6 +45,8 @@ final class ModelManager: ObservableObject {
     @Published var performance: PerformanceMode { didSet { save() } }
     @Published var useCPU: Bool { didSet { save() } }
     @Published var zeroCopy: Bool { didSet { save() } }
+    @Published var streamMode: StreamMode { didSet { save() } }
+    @Published var showSlowModels: Bool { didSet { save() } }
 
     // State
     @Published private(set) var installed: Set<String> = []
@@ -36,14 +58,18 @@ final class ModelManager: ObservableObject {
 
     init() {
         let d = UserDefaults.standard
-        musicID = d.string(forKey: "musicID") ?? "acestep-v15-turbo"
-        musicQuant = Quant(rawValue: d.string(forKey: "musicQuant") ?? "") ?? .q4
-        songwriterID = d.string(forKey: "songwriterID") ?? "acestep-5Hz-lm-0.6B"
-        songwriterQuant = Quant(rawValue: d.string(forKey: "songwriterQuant") ?? "") ?? .q8
+        // First launch: start from the setup recommended for this phone's memory.
+        let rec = Device.recommendation
+        musicID = d.string(forKey: "musicID") ?? rec.music.id
+        musicQuant = Quant(rawValue: d.string(forKey: "musicQuant") ?? "") ?? rec.musicQuant
+        songwriterID = d.string(forKey: "songwriterID") ?? rec.songwriter.id
+        songwriterQuant = Quant(rawValue: d.string(forKey: "songwriterQuant") ?? "") ?? rec.songwriterQuant
         useSongwriter = d.object(forKey: "useSongwriter") as? Bool ?? true
         performance = PerformanceMode(rawValue: d.string(forKey: "performance") ?? "") ?? .auto
         useCPU = d.bool(forKey: "useCPU")
         zeroCopy = d.object(forKey: "zeroCopy") as? Bool ?? true
+        streamMode = StreamMode(rawValue: d.string(forKey: "streamMode") ?? "") ?? .auto
+        showSlowModels = d.bool(forKey: "showSlowModels")
 
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         directory = support.appendingPathComponent("models", isDirectory: true)
@@ -67,6 +93,8 @@ final class ModelManager: ObservableObject {
         d.set(performance.rawValue, forKey: "performance")
         d.set(useCPU, forKey: "useCPU")
         d.set(zeroCopy, forKey: "zeroCopy")
+        d.set(streamMode.rawValue, forKey: "streamMode")
+        d.set(showSlowModels, forKey: "showSlowModels")
     }
 
     // MARK: selection
@@ -119,7 +147,48 @@ final class ModelManager: ObservableObject {
     var liteActive: Bool { performance == .lite || (performance == .auto && Device.isLowMemory) }
 
     var engineOptions: EngineOptions {
-        EngineOptions(zeroCopy: zeroCopy, lowMemory: liteActive, useCPU: useCPU, verbose: LogCapture.shared.verbose)
+        EngineOptions(zeroCopy: zeroCopy, lowMemory: liteActive, useCPU: useCPU, verbose: LogCapture.shared.verbose,
+                      streamLayers: streamMode.engineValue)
+    }
+
+    /// How the selected music model will run here.
+    var musicFit: Fit {
+        guard let f = musicFile else { return .good }
+        let fit = Device.fit(bytes: f.bytes, streamable: true, lite: liteActive)
+        if streamMode == .always { return .streamed }
+        if fit == .streamed && streamMode == .never { return .tooBig }
+        return fit
+    }
+
+    /// Will the next song stream the music model from storage?
+    var willStream: Bool { musicFit == .streamed }
+
+    func fit(_ f: ModelFile, music: Bool) -> Fit {
+        let fit = Device.fit(bytes: f.bytes, streamable: music && streamMode != .never, lite: liteActive)
+        return fit
+    }
+
+    /// Select the recommended setup (downloads whatever's missing separately).
+    func applyRecommendation() {
+        let r = Device.recommendation
+        musicID = r.music.id
+        musicQuant = r.musicQuant
+        songwriterID = r.songwriter.id
+        songwriterQuant = r.songwriterQuant
+        if r.lite && performance == .full { performance = .auto }
+    }
+
+    var recommendedFiles: [ModelFile] {
+        let r = Device.recommendation
+        var files = [r.music.file(r.musicQuant), textEncoderFile, Catalog.vae].compactMap { $0 }
+        if useSongwriter, let s = r.songwriter.file(r.songwriterQuant) { files.insert(s, at: 0) }
+        return files
+    }
+
+    var isRecommendedSelected: Bool {
+        let r = Device.recommendation
+        return musicID == r.music.id && musicQuant == r.musicQuant
+            && songwriterID == r.songwriter.id && songwriterQuant == r.songwriterQuant
     }
 
     /// Longest song this phone can render without being killed for memory.

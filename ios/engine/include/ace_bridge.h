@@ -31,6 +31,11 @@ typedef struct {
     int low_memory;  // smaller KV cache and decode tiles for 4 GB devices (default 0)
     int use_cpu;     // 1 = run on the CPU cores (NEON) instead of the GPU (Metal). Slower, same RAM.
     int verbose;     // 1 = dump requests, per-stage timing and memory to stderr
+    // Layer streaming for the music model: 0 = off, 1 = always, 2 = only when
+    // the model doesn't fit in memory. Streaming keeps one transformer layer
+    // resident and re-reads the rest from storage every step: much less RAM,
+    // a lot slower.
+    int stream_layers;
 } ace_engine_options;
 
 typedef struct {
@@ -76,6 +81,7 @@ typedef struct {
     char     lyrics[4096];         // lyrics used (written by the songwriter in simple mode)
     uint64_t peak_bytes[ACE_STAGE_COUNT];  // peak process memory per stage
     uint64_t mapped_ok;            // 1 if zero-copy mapping was used
+    uint64_t streamed;             // 1 if the music model ran layer-streamed
 } ace_song_info;
 
 ace_engine * ace_engine_create(void);

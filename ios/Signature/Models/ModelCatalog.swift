@@ -98,20 +98,44 @@ enum Catalog {
 // MARK: - Device fit
 
 enum Fit: Comparable {
-    case good, tight, tooBig
+    case good, tight, streamed, tooBig
     var label: String {
         switch self {
         case .good: return "Fits"
         case .tight: return "Tight"
+        case .streamed: return "Slow mode"
         case .tooBig: return "Too big"
         }
     }
+    /// Shown in the default catalog (no special mode needed).
+    var fitsNormally: Bool { self == .good || self == .tight }
 }
 
 enum Device {
-    /// Memory iOS lets this app use right now plus what it already uses.
+    static var physicalGB: Double { Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824 }
+
+    /// What iOS realistically lets one app use on this RAM size, even with the
+    /// increased-memory-limit entitlement: ~5.5 GB of an 8 GB iPhone, ~3.3 of
+    /// 6 GB, ~2.2 of 4 GB. Used as a ceiling so a lucky reading at launch
+    /// doesn't recommend models that get killed later.
+    static var ceiling: Int64 {
+        let gb = physicalGB
+        let cap: Double
+        switch gb {
+        case ..<4.6: cap = 2.2
+        case ..<6.6: cap = 3.3
+        case ..<8.6: cap = 5.5
+        case ..<12.6: cap = 7.5
+        default: cap = gb * 0.6
+        }
+        return Int64(cap * 1_073_741_824)
+    }
+
+    /// Memory iOS lets this app use right now plus what it already uses,
+    /// capped at the realistic ceiling for this RAM size.
     static var budget: Int64 {
-        Int64(os_proc_available_memory()) + Int64(SongEngine.footprint)
+        let measured = Int64(os_proc_available_memory()) + Int64(SongEngine.footprint)
+        return measured > 512 * 1_048_576 ? min(measured, ceiling) : ceiling
     }
 
     static var budgetGB: Double { Double(budget) / 1_073_741_824 }
@@ -119,12 +143,54 @@ enum Device {
     /// 4 GB iPhones get roughly 2-2.5 GB; anything under 3 GB runs Lite.
     static var isLowMemory: Bool { budgetGB < 3.0 }
 
-    /// Only one model is loaded at a time, so the largest file decides.
-    /// Mapped weights are partly reclaimable, so this is deliberately rough.
-    static func fit(bytes: Int64) -> Fit {
-        let ratio = Double(bytes) / Double(max(budget, 1))
-        if ratio <= 0.55 { return .good }
-        if ratio <= 0.85 { return .tight }
+    /// Working memory on top of the weights (activations, KV cache, decode tiles).
+    static func working(lite: Bool) -> Int64 { (lite ? 500 : 900) * 1_048_576 }
+
+    /// Resident need of one model. Only one model is loaded at a time, so the
+    /// largest decides. Streamed: embeddings plus one transformer layer.
+    /// Matches the engine's own memory guard.
+    static func need(bytes: Int64, lite: Bool = isLowMemory, streamed: Bool = false) -> Int64 {
+        (streamed ? bytes * 12 / 100 : bytes) + working(lite: lite)
+    }
+
+    /// `streamable`: music models can fall back to layer streaming.
+    static func fit(bytes: Int64, streamable: Bool = false, lite: Bool = isLowMemory) -> Fit {
+        let b = Double(budget)
+        let n = Double(need(bytes: bytes, lite: lite))
+        if n <= 0.85 * b { return .good }
+        if n <= b { return .tight }
+        if streamable, Double(need(bytes: bytes, lite: lite, streamed: true)) <= b { return .streamed }
         return .tooBig
+    }
+
+    /// The setup we'd pick for this phone: best quality that fits comfortably.
+    struct Recommendation {
+        let music: MusicModel
+        let musicQuant: Quant
+        let songwriter: SongwriterModel
+        let songwriterQuant: Quant
+        let lite: Bool
+        let why: String
+    }
+
+    static var recommendation: Recommendation {
+        let gb = budgetGB
+        let turbo = Catalog.music("acestep-v15-turbo")!
+        let small = Catalog.songwriter("acestep-5Hz-lm-0.6B")!
+        let mid = Catalog.songwriter("acestep-5Hz-lm-1.7B")!
+        if gb >= 7, let xl = Catalog.music("acestep-v15-xl-turbo") {
+            return .init(music: xl, musicQuant: .q6, songwriter: mid, songwriterQuant: .q8, lite: false,
+                         why: "Plenty of memory: the XL model at high quality with the bigger songwriter.")
+        }
+        if gb >= 5 {
+            return .init(music: turbo, musicQuant: .q8, songwriter: mid, songwriterQuant: .q8, lite: false,
+                         why: "Turbo at very high quality and the 1.7B songwriter fit comfortably in the ~\(String(format: "%.1f", gb)) GB iOS gives Signature.")
+        }
+        if gb >= 3.2 {
+            return .init(music: turbo, musicQuant: .q6, songwriter: small, songwriterQuant: .q8, lite: false,
+                         why: "Turbo at high quality with the small songwriter leaves headroom on this phone.")
+        }
+        return .init(music: turbo, musicQuant: .q4, songwriter: small, songwriterQuant: .q8, lite: true,
+                     why: "Compact Turbo, the small songwriter and Lite mode keep everything under ~\(String(format: "%.1f", gb)) GB.")
     }
 }

@@ -109,6 +109,10 @@ struct CreateView: View {
                 HStack(spacing: 6) {
                     Image(systemName: onPC ? "desktopcomputer" : "iphone")
                     Text(onPC ? (hub.pairing?.name ?? "PC") : models.music.name).lineLimit(1)
+                    if !onPC && models.willStream {
+                        Image(systemName: "tortoise.fill").font(.caption).foregroundStyle(Theme.accent)
+                            .accessibilityLabel("Low memory mode")
+                    }
                     Image(systemName: "chevron.down").font(.caption2.weight(.bold))
                 }
                 .font(.subheadline.weight(.semibold))

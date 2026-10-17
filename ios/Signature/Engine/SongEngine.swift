@@ -36,6 +36,7 @@ struct EngineOptions: Equatable {
     var lowMemory = false
     var useCPU = false
     var verbose = false
+    var streamLayers: Int32 = 2   // 0 never, 1 always, 2 when the model doesn't fit
 }
 
 struct SongRequest {
@@ -65,6 +66,7 @@ struct SongResult {
     var caption: String
     var lyrics: String
     var peakBytes: [UInt64]   // per stage
+    var streamed = false      // music model ran layer-streamed (slow mode)
 }
 
 enum SongEngineError: LocalizedError {
@@ -124,7 +126,8 @@ final class SongEngine: @unchecked Sendable {
                     var o = ace_engine_options(zero_copy: options.zeroCopy ? 1 : 0,
                                                low_memory: options.lowMemory ? 1 : 0,
                                                use_cpu: options.useCPU ? 1 : 0,
-                                               verbose: options.verbose ? 1 : 0)
+                                               verbose: options.verbose ? 1 : 0,
+                                               stream_layers: options.streamLayers)
                     ace_engine_set_options(handle, &o)
                     self.applied = options
                 }
@@ -192,7 +195,7 @@ final class SongEngine: @unchecked Sendable {
                         seed: i.seed_used, bpm: Int(i.bpm),
                         key: Self.string(i.keyscale), duration: Double(i.duration),
                         caption: Self.string(i.caption), lyrics: Self.string(i.lyrics),
-                        peakBytes: peaks))
+                        peakBytes: peaks, streamed: i.streamed != 0))
                 case 1:
                     cont.resume(returning: nil)
                 default:
