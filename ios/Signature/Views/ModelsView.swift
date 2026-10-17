@@ -437,14 +437,14 @@ struct SettingsView: View {
                         Text("GPU (Metal)").tag(false)
                         Text("CPU").tag(true)
                     }
-                    Toggle("Map models from storage", isOn: $models.zeroCopy)
+                    Toggle("Map models from storage (CPU)", isOn: $models.zeroCopy)
                     Picker("Low memory (slow)", selection: $models.streamMode) {
                         ForEach(StreamMode.allCases) { Text($0.title).tag($0) }
                     }
                 } header: {
                     Text("Performance")
                 } footer: {
-                    Text("Lite uses less memory (shorter songs, smaller working buffers) and turns on automatically when iOS gives Signature under 3 GB, as on 4 GB iPhones. GPU is fastest; CPU uses the same memory but is slower. Mapping reads model weights straight from storage instead of copying them into memory. Leave it on unless songs fail.\n\nLow memory streams the music model from storage one layer at a time, like ComfyUI's low-VRAM offload: models bigger than this iPhone's memory can still run, several times slower. “When needed” only does it for models that don't fit.")
+                    Text("Lite uses less memory (shorter songs, smaller working buffers) and turns on automatically when iOS gives Signature under 3 GB, as on 4 GB iPhones. GPU is fastest; CPU uses the same memory but is slower. Mapping reads model weights straight from storage instead of copying them (CPU only; on the GPU weights are always copied).\n\nLow memory streams the music model from storage one layer at a time, like ComfyUI's low-VRAM offload: models bigger than this iPhone's memory can still run, several times slower. “When needed” only does it for models that don't fit.")
                 }
 
                 Section {

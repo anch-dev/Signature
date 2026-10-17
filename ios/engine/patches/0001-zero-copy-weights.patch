@@ -451,10 +451,10 @@ index 6adc2b0..99ff6b6 100644
      }
      if (a_src->ne[0] != b_src->ne[0] || a_src->type != b_src->type) {
 diff --git a/src/weight-ctx.h b/src/weight-ctx.h
-index e43f573..d54b153 100644
+index e43f573..0b1d0ad 100644
 --- a/src/weight-ctx.h
 +++ b/src/weight-ctx.h
-@@ -14,10 +14,89 @@
+@@ -14,10 +14,92 @@
  #include "ggml.h"
  
  #include <cstddef>
@@ -511,6 +511,9 @@ index e43f573..d54b153 100644
 +    uint8_t *                    map      = nullptr;
 +    size_t                       map_size = 0;
 +    ggml_backend_dev_t           dev      = nullptr;
++    ggml_backend_buffer_type_t   buft     = nullptr;
++    ggml_backend_buffer_t        scratch  = nullptr;  // holds the one live layer
++    size_t                       max_span = 0;
 +    std::vector<WctxStreamGroup> groups;
 +    size_t                       streamed_bytes = 0;
 +    size_t                       read_bytes     = 0;  // running total, for logs
@@ -544,7 +547,7 @@ index e43f573..d54b153 100644
  struct WeightCtx {
      struct ggml_context * ctx;
      ggml_backend_buffer_t buffer;
-@@ -35,6 +114,16 @@ struct WeightCtx {
+@@ -35,6 +117,16 @@ struct WeightCtx {
      // unique_ptr keeps the data address stable even when the outer vector grows,
      // so src pointers stored in pending stay valid across staging.push_back().
      std::vector<std::unique_ptr<float[]>> staging;
@@ -561,7 +564,7 @@ index e43f573..d54b153 100644
  };
  
  static void wctx_init(WeightCtx * wctx, int n_tensors) {
-@@ -48,24 +137,310 @@ static void wctx_init(WeightCtx * wctx, int n_tensors) {
+@@ -48,24 +140,318 @@ static void wctx_init(WeightCtx * wctx, int n_tensors) {
      wctx->buffer = NULL;
      wctx->pending.clear();
      wctx->pending.reserve(n_tensors);
@@ -585,6 +588,12 @@ index e43f573..d54b153 100644
 +    struct ggml_backend_dev_props props;
 +    ggml_backend_dev_get_props(dev, &props);
 +    if (!props.caps.buffer_from_host_ptr) {
++        return;
++    }
++    // GPU (Metal) reads of no-copy file mappings produced garbage weights on
++    // iOS, so mapping is CPU-only. GPUs get copies (or layer streaming).
++    if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
++        fprintf(stderr, "[WeightCtx] mapping off on %s (copying weights)\n", ggml_backend_dev_name(dev));
 +        return;
 +    }
 +
@@ -672,12 +681,6 @@ index e43f573..d54b153 100644
 +static bool wctx_stream_prepare(WeightCtx * wctx, ggml_backend_t backend, const char * prefix, int n_groups) {
 +    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
 +    if (!dev || n_groups <= 0) {
-+        return false;
-+    }
-+    struct ggml_backend_dev_props props;
-+    ggml_backend_dev_get_props(dev, &props);
-+    if (!props.caps.buffer_from_host_ptr) {
-+        fprintf(stderr, "[Stream] backend can't wrap host memory; streaming off\n");
          return false;
      }
 -    // Mark as weight buffer so ggml_backend_sched assigns ops to the correct
@@ -731,6 +734,7 @@ index e43f573..d54b153 100644
 +        st->map         = (uint8_t *) ptr;
 +        st->map_size    = m.size;
 +        st->dev         = dev;
++        st->buft        = ggml_backend_get_default_buffer_type(backend);
 +        st->groups.resize(n_groups);
 +        const size_t page = (size_t) sysconf(_SC_PAGESIZE);
 +        for (int g = 0; g < n_groups; g++) {
@@ -756,6 +760,7 @@ index e43f573..d54b153 100644
 +                pc.nbytes     = 0;  // nothing to copy at load
 +            }
 +            st->streamed_bytes += gr.bytes;
++            st->max_span = gr.span > st->max_span ? gr.span : st->max_span;
 +        }
 +        wctx->stream = st;
 +        fprintf(stderr, "[Stream] %d layers deferred, %.1f MB streamed per pass\n", n_groups,
@@ -773,7 +778,9 @@ index e43f573..d54b153 100644
 +    madvise(st->map + st->groups[g].lo, st->groups[g].span, MADV_WILLNEED);
 +}
 +
-+// Make layer g's weights live. Returns false if the backend refused the wrap.
++// Make layer g's weights live: copy them from the file mapping into one
++// reusable backend buffer sized for the largest layer. Only one layer is
++// live at a time (release before the next acquire).
 +static bool wctx_stream_acquire(WeightCtx * wctx, int g) {
 +    WctxStream * st = wctx->stream;
 +    if (!st || g < 0 || g >= (int) st->groups.size()) {
@@ -783,21 +790,26 @@ index e43f573..d54b153 100644
 +    if (gr.buf || gr.tensors.empty()) {
 +        return true;
 +    }
-+    // Wrap the page-rounded span; stays inside the mapping (whole pages).
-+    const size_t page = (size_t) sysconf(_SC_PAGESIZE);
-+    size_t       span = (gr.span + page - 1) / page * page;
-+    gr.buf            = ggml_backend_dev_buffer_from_host_ptr(st->dev, st->map + gr.lo, span, gr.max_tensor);
-+    if (!gr.buf) {
-+        fprintf(stderr, "[Stream] FATAL: could not wrap layer %d (%.1f MB)\n", g, (double) span / 1048576.0);
-+        return false;
++    if (!st->scratch) {
++        size_t align = ggml_backend_buft_get_alignment(st->buft);
++        st->scratch  = ggml_backend_buft_alloc_buffer(st->buft, st->max_span + align);
++        if (!st->scratch) {
++            fprintf(stderr, "[Stream] FATAL: could not allocate layer buffer (%.1f MB)\n",
++                    (double) st->max_span / 1048576.0);
++            return false;
++        }
++        ggml_backend_buffer_set_usage(st->scratch, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 +    }
-+    ggml_backend_buffer_set_usage(gr.buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
++    uint8_t * base = (uint8_t *) ggml_backend_buffer_get_base(st->scratch);
 +    for (size_t i = 0; i < gr.tensors.size(); i++) {
-+        if (ggml_backend_tensor_alloc(gr.buf, gr.tensors[i], st->map + gr.lo + gr.offs[i]) != GGML_STATUS_SUCCESS) {
++        struct ggml_tensor * t = gr.tensors[i];
++        if (ggml_backend_tensor_alloc(st->scratch, t, base + gr.offs[i]) != GGML_STATUS_SUCCESS) {
 +            fprintf(stderr, "[Stream] FATAL: tensor bind failed in layer %d\n", g);
 +            return false;
 +        }
++        ggml_backend_tensor_set(t, st->map + gr.lo + gr.offs[i], 0, ggml_nbytes(t));
 +    }
++    gr.buf = st->scratch;
 +    st->read_bytes += gr.bytes;
 +    return true;
 +}
@@ -815,8 +827,7 @@ index e43f573..d54b153 100644
 +        t->data   = NULL;
 +        t->buffer = NULL;
 +    }
-+    ggml_backend_buffer_free(gr.buf);
-+    gr.buf = nullptr;
++    gr.buf = nullptr;  // the shared layer buffer is reused, freed with the model
 +}
 +#endif
 +
@@ -881,7 +892,7 @@ index e43f573..d54b153 100644
      wctx->pending.clear();
      wctx->staging.clear();
      return true;
-@@ -75,6 +450,25 @@ static void wctx_free(WeightCtx * wctx) {
+@@ -75,6 +461,28 @@ static void wctx_free(WeightCtx * wctx) {
      if (wctx->buffer) {
          ggml_backend_buffer_free(wctx->buffer);
      }
@@ -898,6 +909,9 @@ index e43f573..d54b153 100644
 +    if (wctx->stream) {
 +        for (size_t g = 0; g < wctx->stream->groups.size(); g++) {
 +            wctx_stream_release(wctx, (int) g);
++        }
++        if (wctx->stream->scratch) {
++            ggml_backend_buffer_free(wctx->stream->scratch);
 +        }
 +        munmap(wctx->stream->map, wctx->stream->map_size);
 +        delete wctx->stream;

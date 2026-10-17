@@ -447,8 +447,10 @@ ace_engine * ace_engine_create(void) {
         delete e;
         return nullptr;
     }
+    // Mapping only applies on the CPU backend (see weight-ctx.h); on the GPU
+    // keep the upstream fused weights.
     g_wctx_zero_copy = e->opts.zero_copy != 0;
-    g_wctx_no_fuse   = g_wctx_zero_copy;
+    g_wctx_no_fuse   = false;
     return e;
 }
 
@@ -467,7 +469,7 @@ void ace_engine_set_options(ace_engine * e, const ace_engine_options * o) {
     std::lock_guard<std::mutex> lock(e->busy);
     e->opts          = *o;
     g_wctx_zero_copy = o->zero_copy != 0;
-    g_wctx_no_fuse   = g_wctx_zero_copy;  // fused weights can't be mapped from the file
+    g_wctx_no_fuse   = g_wctx_zero_copy && o->use_cpu;  // fused weights can't be mapped; GPU never maps
     // Takes effect the next time a model loads (strict eviction reloads per stage).
     g_use_cpu = o->use_cpu ? 1 : 0;
     if (o->use_cpu) {
@@ -527,6 +529,9 @@ int ace_engine_generate(ace_engine *             e,
     const float src_secs = (float) src_len / 48000.0f;
     const float duration = task != ACE_TASK_NEW ? std::clamp(src_secs, 1.0f, maxd)
                                                 : std::clamp(r->duration > 0 ? r->duration : 60.0f, 10.0f, maxd);
+
+    g_wctx_stream  = false;
+    g_wctx_no_fuse = e->opts.zero_copy != 0 && e->opts.use_cpu != 0;
 
     Peaks   peaks;
     Verbose vb;
@@ -702,7 +707,10 @@ int ace_engine_generate(ace_engine *             e,
                     (double) avail / 1048576.0);
         }
     }
-    g_wctx_stream = stream;
+    g_wctx_stream  = stream;
+    // Streamed layers must be plain file tensors: fused QKV / gate+up copies
+    // would stay resident, so fusion is off for a streamed load.
+    g_wctx_no_fuse = stream || (e->opts.zero_copy != 0 && e->opts.use_cpu != 0);
     if (!fits_need(module_need(m->dit_path, low, stream), err, err_len, "music model",
                    stream ? "Pick a smaller size (Compact) or close other apps."
                           : "Pick a smaller size, turn on Low memory (slow) in Settings, or close other apps.")) {
