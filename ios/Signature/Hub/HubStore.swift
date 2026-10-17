@@ -21,6 +21,10 @@ final class HubStore: ObservableObject {
     var client: HubClient? { pairing.map(HubClient.init) }
     var isPaired: Bool { pairing != nil }
 
+    /// YuE2 installed on the PC (install-yue2.bat).
+    var yue2Ready: Bool { reachable && (status?.yue2?.ready ?? false) }
+    var yue2Reason: String { status?.yue2?.reason ?? "Update the Hub on your PC to use YuE2." }
+
     var canGenerate: Bool {
         guard let s = status, reachable else { return false }
         return s.installed.acestep && s.engine.mode != "training" && !(s.training?.isRunning ?? false)

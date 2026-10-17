@@ -26,7 +26,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request,
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
-from . import __version__, config, datasets
+from . import __version__, config, datasets, yue2
 from .generation import Generator
 from .supervisor import Supervisor, gpu_info
 from .training import Trainer, adapters
@@ -159,6 +159,7 @@ async def status():
         "training": trainer.job.public() if trainer.job else None,
         "queue": sum(1 for j in gen.jobs.values() if j.status in ("queued", "starting", "running")),
         "loaded_style": gen.loaded_adapter,
+        "yue2": yue2.status(),
     }
 
 
@@ -184,11 +185,24 @@ async def set_mode(body: ModeBody):
 
 @app.get("/api/logs", dependencies=[Depends(auth)])
 async def logs(source: str = "engine", tail: int = Query(200, le=2000)):
-    lines = trainer.logs(tail) if source == "training" else sup.logs(tail)
+    if source == "training":
+        lines = trainer.logs(tail)
+    elif source == "yue2" or (source == "engine" and yue2.runner.recently_active):
+        lines = yue2.runner.lines(tail)
+    else:
+        lines = sup.logs(tail)
     return {"source": source, "lines": lines}
 
 
 # ---- generation --------------------------------------------------------------
+class SoundBody(BaseModel):
+    weirdness: float = Field(default=0.5, ge=0, le=1)
+    style_influence: float = Field(default=0.5, ge=0, le=1)
+    clarity: float = Field(default=0.5, ge=0, le=1)
+    sampler: str = "smooth"      # smooth | organic | crisp
+    quality: str = "standard"    # fast | standard | high
+
+
 class GenBody(BaseModel):
     caption: str = Field(min_length=1, max_length=2000)
     lyrics: str = Field(default="", max_length=8000)
@@ -205,6 +219,9 @@ class GenBody(BaseModel):
     cover_strength: float = Field(default=0.7, ge=0, le=1)
     repaint_start: float = 0.0
     repaint_end: float = -1.0
+    sound: Optional[SoundBody] = None
+    engine: str = "acestep"          # acestep | yue2
+    cot: str = "off"                 # yue2 planning: off | melody | full
 
 
 @app.post("/api/sources", dependencies=[Depends(auth)])
@@ -236,7 +253,10 @@ async def generate(body: GenBody):
                      adapter=body.style, adapter_scale=body.style_scale, seed=body.seed, bpm=body.bpm,
                      simple=body.simple, enhance=body.enhance, task=body.task if body.task in ("new", "cover", "repaint") else "new",
                      source=_source_path(body.source), cover_strength=body.cover_strength,
-                     repaint_start=body.repaint_start, repaint_end=body.repaint_end)
+                     repaint_start=body.repaint_start, repaint_end=body.repaint_end,
+                     sound=(body.sound or SoundBody()).model_dump(),
+                     engine=body.engine if body.engine in ("acestep", "yue2") else "acestep",
+                     cot=body.cot)
     return job.public()
 
 
@@ -269,7 +289,8 @@ async def job_audio(job_id: str):
     p = gen.audio_path(job_id)
     if not p or not p.exists():
         raise HTTPException(404, "No audio for this job")
-    return FileResponse(p, media_type="audio/mpeg", filename=f"{job_id}.mp3")
+    media = "audio/wav" if p.suffix == ".wav" else "audio/mpeg"
+    return FileResponse(p, media_type=media, filename=f"{job_id}{p.suffix}")
 
 
 # ---- datasets ------------------------------------------------------------------

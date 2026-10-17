@@ -26,23 +26,38 @@ struct CreateView: View {
     ]
 
     private var onPC: Bool { gen.target == .pc }
-    private var ready: Bool { onPC ? hub.canGenerate : models.isReady }
+    private var yue: Bool { gen.engine == .yue2 }
+    private var ready: Bool {
+        if yue { return onPC ? hub.yue2Ready && hub.canGenerate : models.yue2Ready && Yue2Engine.shared.isIncluded }
+        return onPC ? hub.canGenerate : models.isReady
+    }
+    static let yueTags = ["english", "pop", "rock", "indie", "r&b", "hip hop", "metal", "folk", "city pop", "ballad",
+                          "female", "male", "warm vocal", "airy vocal", "powerful vocal", "acoustic guitar",
+                          "piano", "synth", "strings", "drums", "upbeat", "melancholic", "dreamy", "energetic"]
     private var limit: Double { onPC ? 480 : models.maxDuration }
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 18) {
                     header
-                    PillPicker(options: CreateMode.allCases, selection: $gen.mode) { $0.title }
-                    if !onPC && !models.isReady { downloadCard }
-                    if onPC { pcStatus }
-                    switch gen.mode {
-                    case .simple: simpleForm
-                    case .custom: customForm
-                    case .cover: coverForm
+                    if yue {
+                        yueBanner
+                        if !onPC && !(models.yue2Ready && Yue2Engine.shared.isIncluded) { yueDownloadCard }
+                        if onPC { pcStatus }
+                        yueForm
+                    } else {
+                        PillPicker(options: CreateMode.allCases, selection: $gen.mode) { $0.title }
+                        if !onPC && !models.isReady { downloadCard }
+                        if onPC { pcStatus }
+                        switch gen.mode {
+                        case .simple: simpleForm
+                        case .custom: customForm
+                        case .cover: coverForm
+                        }
+                        soundRow
                     }
-                    soundRow
+                    SoundControls(sound: $gen.sound, engine: gen.engine, turbo: onPC || models.music.steps != 50)
                     optionsCard
                     if let e = gen.error {
                         Label(e, systemImage: "exclamationmark.triangle.fill")
@@ -52,15 +67,17 @@ struct CreateView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
+                .readableWidth()
             }
             .scrollDismissesKeyboard(.interactively)
             .screen()
             .safeAreaInset(edge: .bottom) {
-                CreateButton(title: onPC ? "Create on \(hub.pairing?.name ?? "PC")" : "Create",
+                CreateButton(title: (yue ? "Create with YuE2" : "Create") + (onPC ? " on \(hub.pairing?.name ?? "PC")" : ""),
                              running: gen.running, progress: gen.progress,
                              status: gen.etaText.map { "\(gen.statusText) · \($0)" } ?? gen.statusText,
                              enabled: ready, action: create, cancel: gen.cancel)
                     .padding(.horizontal, 16).padding(.vertical, 8)
+                    .readableWidth()
                     .background(.ultraThinMaterial)
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -108,8 +125,8 @@ struct CreateView: View {
             Button { showModels = true } label: {
                 HStack(spacing: 6) {
                     Image(systemName: onPC ? "desktopcomputer" : "iphone")
-                    Text(onPC ? (hub.pairing?.name ?? "PC") : models.music.name).lineLimit(1)
-                    if !onPC && models.willStream {
+                    Text(yue ? "YuE2" : (onPC ? (hub.pairing?.name ?? "PC") : models.music.name)).lineLimit(1)
+                    if !onPC && !yue && models.willStream {
                         Image(systemName: "tortoise.fill").font(.caption).foregroundStyle(Theme.accent)
                             .accessibilityLabel("Low memory mode")
                     }
@@ -160,6 +177,9 @@ struct CreateView: View {
 
     @ViewBuilder private var pcStatus: some View {
         if let s = hub.status, hub.reachable {
+            if yue && !hub.yue2Ready {
+                Label(hub.yue2Reason, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(Theme.warn)
+            }
             if s.training?.isRunning == true {
                 Label("\(hub.pairing?.name ?? "PC") is training \(s.training!.dataset). Create on this device meanwhile.", systemImage: "hourglass")
                     .font(.callout).foregroundStyle(Theme.warn)
@@ -167,6 +187,102 @@ struct CreateView: View {
         } else {
             Label("Can't reach \(hub.pairing?.name ?? "the PC"). Same Wi-Fi or Tailscale on?", systemImage: "wifi.exclamationmark")
                 .font(.callout).foregroundStyle(Theme.bad)
+        }
+    }
+
+    // MARK: YuE2
+
+    private var yueBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "flask.fill").foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("YuE2 · Experimental").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
+                Text("Writes melody and vocals from your lyrics. Slower than ACE-Step. CC BY-NC 4.0: non-commercial use.")
+                    .font(.caption).foregroundStyle(Theme.muted)
+            }
+            Spacer(minLength: 0)
+        }
+        .card(padding: 12)
+    }
+
+    @ViewBuilder private var yueDownloadCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !Yue2Engine.shared.isIncluded {
+                Text("On-device YuE2 isn't in this build yet. Pair your PC and run install-yue2 there, or switch back to ACE-Step.")
+                    .font(.callout).foregroundStyle(Theme.muted)
+            } else {
+                HStack {
+                    Image(systemName: "arrow.down.circle.fill").font(.title2).foregroundStyle(Theme.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(models.yue2Downloading ? "Downloading YuE2" : "Get YuE2 on this device")
+                            .font(.headline).foregroundStyle(Theme.text)
+                        Text("\(ModelManager.format(Yue2Catalog.bytes)) download. Needs about \(String(format: "%.1f", Double(Yue2Catalog.estimatedPeak) / 1_073_741_824)) GB of memory; this device allows \(String(format: "%.1f", Device.budgetGB)) GB.")
+                            .font(.caption).foregroundStyle(Theme.muted)
+                    }
+                    Spacer()
+                }
+                if models.yue2Downloading {
+                    ProgressView(value: models.yue2Progress).tint(Theme.accent)
+                } else {
+                    Button { models.downloadYue2() } label: {
+                        Text("Download").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
+                            .background(Capsule().fill(Theme.inverse)).foregroundStyle(Theme.onInverse)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .card()
+    }
+
+    private var yueForm: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("Lyrics", trailing: AnyView(
+                    Chip(title: "Instrumental", icon: gen.instrumental ? "checkmark" : nil, selected: gen.instrumental) {
+                        gen.instrumental.toggle()
+                    }))
+                if !gen.instrumental {
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $gen.lyrics)
+                            .focused($focused)
+                            .scrollContentBackground(.hidden)
+                            .frame(minHeight: 220)
+                            .font(.body.monospaced())
+                            .foregroundStyle(Theme.text)
+                        if gen.lyrics.isEmpty {
+                            Text("[verse]\nYour first lines\n\n[chorus]\nThe hook everyone sings\n\nYuE2 sings exactly these words.")
+                                .font(.body.monospaced()).foregroundStyle(Theme.faint)
+                                .padding(.top, 8).padding(.leading, 5).allowsHitTesting(false)
+                        }
+                    }
+                    .card(padding: 10)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("Style")
+                TextField("", text: $gen.style, prompt: Text("English, indie pop, acoustic guitar, warm female vocal").foregroundColor(Theme.faint), axis: .vertical)
+                    .focused($focused)
+                    .lineLimit(1...4)
+                    .foregroundStyle(Theme.text)
+                    .card(padding: 12)
+                tagRow(Self.yueTags, into: $gen.style)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("Melody planning")
+                PillPicker(options: Yue2Planning.allCases, selection: $gen.yuePlanning) { $0.title }
+                Text(gen.yuePlanning == .off ? "Fastest. YuE2 goes straight to the music."
+                     : gen.yuePlanning == .melody ? "Writes a melody score first: tighter vocal lines, slower."
+                     : "Writes a full arrangement score first: most structured, slowest.")
+                    .font(.caption2).foregroundStyle(Theme.faint)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel("Title")
+                TextField("", text: $gen.title, prompt: Text("Optional").foregroundColor(Theme.faint))
+                    .focused($focused)
+                    .foregroundStyle(Theme.text)
+                    .card(padding: 12)
+            }
         }
     }
 
@@ -193,16 +309,8 @@ struct CreateView: View {
                     Chip(title: "Instrumental", icon: gen.instrumental ? "checkmark" : "pianokeys", selected: gen.instrumental) {
                         gen.instrumental.toggle()
                     }
-                    if !onPC {
-                        Chip(title: "Songwriter", icon: "lock.fill", selected: true) {}
-                            .allowsHitTesting(false)
-                    }
                     enhanceChip
                 }
-            }
-            if !onPC {
-                Text("Simple mode always uses the songwriter: it writes the lyrics from your description.")
-                    .font(.caption2).foregroundStyle(Theme.faint)
             }
         }
     }
@@ -475,7 +583,10 @@ struct CreateView: View {
 
     private var optionsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if gen.mode != .cover {
+            if yue {
+                Label("Length follows your lyrics.", systemImage: "text.alignleft")
+                    .font(.caption).foregroundStyle(Theme.muted)
+            } else if gen.mode != .cover {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Length").font(.caption).foregroundStyle(Theme.muted)
                     LengthPicker(duration: $gen.duration, limit: limit)

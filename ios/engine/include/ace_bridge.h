@@ -64,7 +64,19 @@ typedef struct {
     float        cover_noise;      // cover: 0..1, 0 = fresh take, 1 = stay very close to the source (default 0)
     float        repaint_start;    // repaint: seconds
     float        repaint_end;      // repaint: seconds, -1 = to the end
+
+    // Sound controls. Negative = model default.
+    float        weirdness;        // 0..1: songwriter temperature / top-p (0.5 = default)
+    float        style_influence;  // 0..1: how strictly the prompt is followed (LM CFG; DiT CFG on sft/base)
+    float        clarity;          // 0..1: DCW wavelet correction strength (turbo only; 0.5 = official default)
+    int          sampler;          // ACE_SAMPLER_*
 } ace_song_request;
+
+enum {
+    ACE_SAMPLER_EULER = 0,  // smooth, deterministic (default)
+    ACE_SAMPLER_SDE   = 1,  // fresh noise every step: looser, more organic
+    ACE_SAMPLER_DPM3M = 2,  // higher-order: crisper detail at the same steps
+};
 
 enum {
     ACE_TASK_NEW     = 0,  // text2music

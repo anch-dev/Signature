@@ -19,9 +19,33 @@ enum Quant: String, CaseIterable, Identifiable, Codable {
 }
 
 struct ModelFile: Identifiable, Hashable {
-    let id: String          // file name
+    let id: String          // path inside the models folder (file name, or "<folder>/<path>")
     let bytes: Int64
-    var url: URL { URL(string: "https://huggingface.co/Serveurperso/ACE-Step-1.5-GGUF/resolve/main/\(id)")! }
+    var repo = "Serveurperso/ACE-Step-1.5-GGUF"
+    var repoPath: String? = nil   // path inside the repo when it differs from id
+    var url: URL { URL(string: "https://huggingface.co/\(repo)/resolve/main/\(repoPath ?? id)")! }
+    var fileName: String { (id as NSString).lastPathComponent }
+}
+
+/// YuE2-3B (audio.cpp GGUF package). Experimental; CC BY-NC 4.0.
+enum Yue2Catalog {
+    static let folder = "Yue2-3B-GGUF"
+    private static func f(_ path: String, _ bytes: Int64) -> ModelFile {
+        ModelFile(id: "\(folder)/\(path)", bytes: bytes, repo: "audio-cpp/Yue2-3B-GGUF", repoPath: path)
+    }
+    /// The phone build of the main model (smallest; made for iOS).
+    static let main = f("yue2-3b-ios-q4_0.gguf", 2_311_014_048)
+    static let vae = f("yue2-vae-f16.gguf", 265_218_656)
+    static let sidecars = [
+        f("sidecars/yue2-generation-config.json", 466),
+        f("sidecars/yue2-model-config.json", 959),
+        f("sidecars/yue2-qwen.tiktoken", 2_561_218),
+        f("sidecars/yue2-vae-config.json", 1_378),
+    ]
+    static var files: [ModelFile] { [main, vae] + sidecars }
+    static var bytes: Int64 { files.reduce(0) { $0 + $1.bytes } }
+    /// Rough peak for a ~1 minute song: weights + AR KV cache + NAR/VAE graphs.
+    static let estimatedPeak: Int64 = 4_300_000_000
 }
 
 /// A DiT ("music model") in all the quantizations that exist for it.
@@ -92,7 +116,7 @@ enum Catalog {
     static var allFiles: [ModelFile] {
         music.flatMap { m in m.quants.compactMap(m.file) }
             + songwriters.flatMap { s in s.quants.compactMap(s.file) }
-            + Array(textEncoders.values) + [vae]
+            + Array(textEncoders.values) + [vae] + Yue2Catalog.files
     }
 }
 

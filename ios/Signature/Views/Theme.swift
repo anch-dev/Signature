@@ -61,7 +61,39 @@ extension Palette {
         accent: rgb(0xFF6B3D), inverse: .white, onInverse: .black,
         gradient: [rgb(0xFF7A1A), rgb(0xFF2E78), rgb(0x7A2EF7)])
 
-    static let all: [Palette] = [.dusk, .ocean, .daylight, .midnight]
+    static let rose = Palette(
+        id: "rose", name: "Rose", dark: true,
+        bgTop: rgb(0x3A1A2E), bgBottom: rgb(0x1A0C17), glow: rgb(0xFF6F91, 0.26),
+        card: .white.opacity(0.075), cardHi: .white.opacity(0.13), stroke: .white.opacity(0.10),
+        text: .white, muted: .white.opacity(0.64), faint: .white.opacity(0.40),
+        accent: rgb(0xFF8FA8), inverse: .white, onInverse: rgb(0x2A1222),
+        gradient: [rgb(0xFFB37A), rgb(0xFF6F91), rgb(0xC155E8)])
+
+    static let forest = Palette(
+        id: "forest", name: "Forest", dark: true,
+        bgTop: rgb(0x16352C), bgBottom: rgb(0x0A1A15), glow: rgb(0x7BE0A8, 0.20),
+        card: .white.opacity(0.075), cardHi: .white.opacity(0.13), stroke: .white.opacity(0.10),
+        text: .white, muted: .white.opacity(0.64), faint: .white.opacity(0.40),
+        accent: rgb(0x7BE0A8), inverse: .white, onInverse: rgb(0x0E241D),
+        gradient: [rgb(0xD4E86F), rgb(0x5FD3A0), rgb(0x2F9FC4)])
+
+    static let graphite = Palette(
+        id: "graphite", name: "Graphite", dark: true,
+        bgTop: rgb(0x2B2D33), bgBottom: rgb(0x18191D), glow: rgb(0xFFFFFF, 0.06),
+        card: .white.opacity(0.07), cardHi: .white.opacity(0.12), stroke: .white.opacity(0.09),
+        text: .white, muted: .white.opacity(0.62), faint: .white.opacity(0.38),
+        accent: rgb(0xFFB547), inverse: .white, onInverse: rgb(0x1B1C20),
+        gradient: [rgb(0xFFC857), rgb(0xFF8A4C), rgb(0xF0386B)])
+
+    static let sand = Palette(
+        id: "sand", name: "Sand", dark: false,
+        bgTop: rgb(0xFBF4E8), bgBottom: rgb(0xF2E6D3), glow: rgb(0xE9A86B, 0.22),
+        card: .white.opacity(0.82), cardHi: rgb(0xF1E6D6), stroke: .black.opacity(0.07),
+        text: rgb(0x2A2118), muted: rgb(0x2A2118, 0.58), faint: rgb(0x2A2118, 0.38),
+        accent: rgb(0xC8682D), inverse: rgb(0x2A2118), onInverse: .white,
+        gradient: [rgb(0xE9A86B), rgb(0xD9603B), rgb(0x9B3D6E)])
+
+    static let all: [Palette] = [.dusk, .ocean, .rose, .forest, .graphite, .midnight, .daylight, .sand]
     static func named(_ id: String) -> Palette { all.first { $0.id == id } ?? .dusk }
 }
 
@@ -139,6 +171,11 @@ extension View {
             .background(Theme.background)
     }
 
+    /// Keeps content at a comfortable reading width on iPad / landscape, centred.
+    func readableWidth(_ max: CGFloat = 720) -> some View {
+        frame(maxWidth: max).frame(maxWidth: .infinity)
+    }
+
     /// Row background for Forms / Lists so they sit on the theme, not system grey.
     func themedRow() -> some View { listRowBackground(Theme.card) }
 }
@@ -149,7 +186,7 @@ struct SectionLabel: View {
     init(_ text: String, trailing: AnyView? = nil) { self.text = text; self.trailing = trailing }
     var body: some View {
         HStack {
-            Text(text.uppercased()).font(.caption.weight(.semibold)).tracking(0.8).foregroundStyle(Theme.muted)
+            Text(text).font(.footnote.weight(.semibold)).foregroundStyle(Theme.muted)
             Spacer()
             trailing
         }
@@ -167,7 +204,7 @@ struct Chip: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if let icon { Image(systemName: icon).font(.caption.weight(.semibold)) }
-                Text(title).font(.subheadline.weight(.medium))
+                Text(title).font(.footnote.weight(.medium))
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
             .foregroundStyle(selected ? Theme.onInverse : Theme.text)

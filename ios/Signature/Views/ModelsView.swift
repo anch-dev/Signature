@@ -11,6 +11,34 @@ struct ModelPickerSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        SectionLabel("Engine")
+                        ForEach(MusicEngine.allCases) { e in
+                            Button { withAnimation(.snappy) { gen.engine = e } } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: e == .acestep ? "waveform" : "flask")
+                                        .font(.title3).frame(width: 28).foregroundStyle(Theme.accent)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack(spacing: 6) {
+                                            Text(e.title).font(.body.weight(.semibold)).foregroundStyle(Theme.text)
+                                            if e == .yue2 {
+                                                Text("EXPERIMENTAL").font(.caption2.weight(.heavy))
+                                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                                    .background(Capsule().fill(Theme.accent.opacity(0.18)))
+                                                    .foregroundStyle(Theme.accent)
+                                            }
+                                        }
+                                        Text(e.blurb).font(.caption).foregroundStyle(Theme.muted)
+                                    }
+                                    Spacer()
+                                    Image(systemName: gen.engine == e ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(gen.engine == e ? Theme.accent : Theme.faint)
+                                }
+                                .card(padding: 12)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                     if hub.isPaired {
                         VStack(alignment: .leading, spacing: 8) {
                             SectionLabel("Make songs on")
@@ -19,7 +47,9 @@ struct ModelPickerSheet: View {
                             }
                         }
                     }
-                    if gen.target == .phone {
+                    if gen.engine == .yue2 {
+                        yueSection
+                    } else if gen.target == .phone {
                         VStack(alignment: .leading, spacing: 8) {
                             SectionLabel("Music model")
                             if models.installedMusic.isEmpty {
@@ -80,12 +110,13 @@ struct ModelPickerSheet: View {
                     } else {
                         VStack(alignment: .leading, spacing: 8) {
                             SectionLabel("On \(hub.pairing?.name ?? "your PC")")
-                            Text("ACE-Step 1.5 Turbo with your PC styles. Choose models and YuE2 in the PC tab.")
+                            Text("ACE-Step 1.5 Turbo with your PC styles. Styles and training are in the PC tab.")
                                 .font(.callout).foregroundStyle(Theme.muted).card()
                         }
                     }
                 }
                 .padding(16)
+                .readableWidth()
             }
             .screen()
             .navigationTitle("Model")
@@ -97,6 +128,48 @@ struct ModelPickerSheet: View {
 }
 
 extension ModelPickerSheet {
+    @ViewBuilder var yueSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionLabel(gen.target == .phone ? "YuE2 on this device" : "YuE2 on \(hub.pairing?.name ?? "your PC")")
+            VStack(alignment: .leading, spacing: 8) {
+                if gen.target == .pc {
+                    Label(hub.yue2Ready ? "Installed on the PC (\(hub.status?.yue2?.model ?? ""))" : hub.yue2Reason,
+                          systemImage: hub.yue2Ready ? "checkmark.circle.fill" : "exclamationmark.triangle")
+                        .foregroundStyle(hub.yue2Ready ? Theme.good : Theme.warn)
+                } else if !Yue2Engine.shared.isIncluded {
+                    Label("Not in this build yet. Use it on your PC for now.", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(Theme.warn)
+                } else {
+                    let fit = Device.fit(bytes: Yue2Catalog.estimatedPeak - Device.working(lite: false))
+                    HStack {
+                        Text("YuE2-3B · iOS Q4").foregroundStyle(Theme.text)
+                        Spacer()
+                        FitBadge(fit: fit)
+                    }
+                    ForEach(Yue2Catalog.files.prefix(2)) { f in
+                        HStack {
+                            Image(systemName: models.isInstalled(f) ? "checkmark.circle.fill" : "arrow.down.circle")
+                                .foregroundStyle(models.isInstalled(f) ? Theme.good : Theme.muted)
+                            Text(f.fileName).font(.caption.monospaced()).foregroundStyle(Theme.muted)
+                            Spacer()
+                            Text(ModelManager.format(f.bytes)).font(.caption).foregroundStyle(Theme.faint)
+                        }
+                    }
+                    if models.yue2Downloading {
+                        ProgressView(value: models.yue2Progress).tint(Theme.accent)
+                    } else if !models.yue2Ready {
+                        Button("Download (\(ModelManager.format(Yue2Catalog.bytes)))") { models.downloadYue2() }
+                            .font(.subheadline.weight(.semibold)).tint(Theme.accent)
+                    }
+                    Text("Needs about \(String(format: "%.1f", Double(Yue2Catalog.estimatedPeak) / 1_073_741_824)) GB while it runs. On phones that's at the limit; iPads with 16 GB have room.")
+                        .font(.caption2).foregroundStyle(Theme.faint)
+                }
+            }
+            .font(.subheadline)
+            .card(padding: 12)
+        }
+    }
+
     func supportRow(_ title: String, _ detail: String, _ f: ModelFile) -> some View {
         HStack {
             Image(systemName: models.isInstalled(f) ? "checkmark.circle.fill" : "arrow.down.circle")
@@ -141,6 +214,8 @@ struct DownloadedModelsSection: View {
             Group(id: "writer", title: "Songwriter", detail: "Writes lyrics, plans structure (5Hz LM)", files: writers),
             Group(id: "enc", title: "Text encoder", detail: "Reads your prompt (Qwen3)", files: enc),
             Group(id: "vae", title: "Audio decoder", detail: "Turns model output into sound (VAE)", files: vae),
+            Group(id: "yue2", title: "YuE2 (experimental)", detail: "audio.cpp package: main model, VAE, sidecars",
+                  files: Yue2Catalog.files.filter { installed.contains($0.id) }.map { ($0, $0.fileName) }),
         ]
     }
 
@@ -148,7 +223,7 @@ struct DownloadedModelsSection: View {
 
     var body: some View {
         Section {
-            ForEach(groups) { g in
+            ForEach(groups.filter { $0.id != "yue2" || !$0.files.isEmpty }) { g in
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
                         Text(g.title).font(.subheadline.weight(.semibold))
@@ -238,6 +313,7 @@ struct ModelsView: View {
                     .font(.caption2).foregroundStyle(Theme.faint)
             }
             .padding(16)
+            .readableWidth()
         }
         .screen()
         .navigationTitle("Models")
@@ -659,33 +735,37 @@ struct RecommendedCard: View {
 /// Settings → Appearance: theme swatches.
 struct AppearanceSection: View {
     @AppStorage("appTheme") private var themeID = "dusk"
+    private let columns = [GridItem(.adaptive(minimum: 72), spacing: 12)]
 
     var body: some View {
         Section {
-            HStack(spacing: 12) {
+            LazyVGrid(columns: columns, spacing: 14) {
                 ForEach(Palette.all, id: \.id) { p in
                     Button { withAnimation { themeID = p.id } } label: {
                         VStack(spacing: 6) {
-                            ZStack {
+                            ZStack(alignment: .bottomLeading) {
                                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                                     .fill(LinearGradient(colors: [p.bgTop, p.bgBottom], startPoint: .top, endPoint: .bottom))
+                                RoundedRectangle(cornerRadius: 5, style: .continuous).fill(p.card)
+                                    .frame(width: 30, height: 14).padding(8).offset(y: -14)
                                 Capsule().fill(LinearGradient(colors: p.gradient, startPoint: .leading, endPoint: .trailing))
-                                    .frame(width: 34, height: 8)
+                                    .frame(width: 40, height: 7).padding(8)
                             }
-                            .frame(height: 56)
+                            .frame(height: 64)
                             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .stroke(themeID == p.id ? Theme.text : Theme.stroke, lineWidth: themeID == p.id ? 2 : 1))
+                                .stroke(themeID == p.id ? Theme.accent : Theme.stroke, lineWidth: themeID == p.id ? 2.5 : 1))
                             Text(p.name).font(.caption.weight(themeID == p.id ? .semibold : .regular))
                                 .foregroundStyle(themeID == p.id ? Theme.text : Theme.muted)
                         }
-                        .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
         } header: {
             Text("Appearance")
+        } footer: {
+            Text("Light themes: Daylight and Sand. Midnight is the original black.")
         }
         .themedRow()
     }

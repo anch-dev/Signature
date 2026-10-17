@@ -63,7 +63,7 @@ struct SignatureApp: App {
                     .tabItem { Label("Settings", systemImage: "gearshape") }
                     .tag(3)
             }
-            .tint(Theme.text)
+            .tint(Theme.accent)
             .preferredColorScheme(Theme.palette.dark ? .dark : .light)
             .id(themeID)   // rebuild every screen when the theme changes
 

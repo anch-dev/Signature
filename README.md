@@ -28,6 +28,7 @@ Standalone; no Pinokio needed. Requires Windows 10/11 (or Linux), an NVIDIA GPU 
 
    Run it as administrator to add the firewall rule automatically, or click **Allow** when Windows asks on first start.
 3. Double-click **`start.bat`**. The Hub dashboard opens at `http://localhost:8790`.
+4. Optional, experimental: double-click **`install-yue2.bat`** to add YuE2 (audio.cpp v0.9.2, CUDA 12.4, plus the YuE2-3B Q8 GGUF; about 5 GB). Use `install-yue2.bat q4` on 8 GB cards. YuE2 then appears as an engine in the app.
 
 ### The dashboard
 
@@ -64,10 +65,16 @@ Point the iPhone **Camera** at the QR code on the Hub dashboard and tap the link
 
 ### Make songs
 On **Create**, choose where to make the song:
-- **This iPhone**: fully offline. Uses the base model or any style you downloaded. Needs about 3.3 GB of models (Models tab), which download once.
+- **This device**: fully offline. Uses the base model or any style you downloaded. Needs about 3.3 GB of models (Models tab), which download once.
 - **Your PC**: faster and allows longer songs (up to 8 minutes). Uses the styles stored on the PC.
 
 Put the trigger word first in your prompt; the **Insert trigger** button does this. Songs are saved to the Library and to **Files → Signature → Songs**.
+
+### Sound controls
+Under **Sound** on Create: Weirdness (songwriter temperature / top-p), Style influence (songwriter CFG; DiT CFG on SFT/Base), Clarity (DCW wavelet correction on Turbo models), Texture (Smooth = Euler, Organic = SDE, Crisp = DPM++ 3M) and Quality (step count). 50% everywhere matches the official ACE-Step 1.5 defaults, including DCW `double` 0.05 / 0.02 on Turbo.
+
+### YuE2 (experimental)
+Pick **YuE2** under Model → Engine. It sings your lyrics (use `[verse]` / `[chorus]` sections) in the style you describe, with optional melody / full-score planning. It runs on the paired PC after `install-yue2.bat`, or on the device when the build includes `AudioCpp.framework` (iOS Q4 model, 2.6 GB download; needs about 4.3 GB of memory while running, so iPads with 16 GB are the safe bet). YuE2-3B is licensed CC BY-NC 4.0.
 
 ### On-device limits
 The app reads how much memory iOS gives it and caps song length to match: 4:00 at 4.5 GB or more, 2:30 at 3–4.5 GB, 1:00 below that. The IPA requests Apple's `increased-memory-limit` entitlement. A free Apple ID may not be allowed it when SideStore re-signs the app, in which case the cap adjusts on its own.
@@ -83,6 +90,7 @@ ios/
   Signature/                  SwiftUI app (on-device engine + PC remote)
   engine/                     C bridge over acestep.cpp
   scripts/build-engine.sh     builds AceEngine.xcframework (Metal)
+  scripts/build-audiocpp.sh   builds AudioCpp.framework (audio.cpp C API, YuE2 only, Metal)
   project.yml                 XcodeGen spec
 .github/workflows/build-ipa.yml
 ```
@@ -104,5 +112,6 @@ Signature's own code is yours. Third-party pieces:
 - ACE-Step 1.5: MIT and Apache-2.0
 - acestep.cpp and ggml: MIT
 - Side-Step: CC BY-NC-SA 4.0 (free for personal use; commercial use needs the author's permission)
+- audio.cpp: Apache-2.0. YuE2-3B weights: CC BY-NC 4.0 (non-commercial)
 
 Only train on music you own or have permission to use.

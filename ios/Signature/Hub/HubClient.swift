@@ -22,6 +22,8 @@ struct HubStatus: Decodable {
     var training: TrainJob?
     var queue: Int
     var loaded_style: String?
+    struct Yue2: Decodable { var ready: Bool; var reason: String; var model: String }
+    var yue2: Yue2?
 }
 
 struct RemoteJob: Decodable, Identifiable {

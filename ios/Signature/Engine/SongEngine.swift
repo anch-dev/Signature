@@ -56,6 +56,41 @@ struct SongRequest {
     var coverNoise: Float = 0
     var repaintStart: Float = 0
     var repaintEnd: Float = -1
+    // Sound controls (0...1, see SoundSettings)
+    var sound = SoundSettings()
+    var turbo = true          // selected music model is a turbo (8-step) model
+}
+
+/// Suno-style sound sliders. 0.5 everywhere = the official ACE-Step defaults.
+struct SoundSettings: Codable, Equatable {
+    var weirdness: Double = 0.5        // songwriter creativity
+    var styleInfluence: Double = 0.5   // how strictly the prompt is followed
+    var clarity: Double = 0.5          // wavelet detail correction (turbo models)
+    var sampler: Sampler = .smooth
+    var quality: Quality = .standard
+
+    enum Sampler: String, Codable, CaseIterable, Identifiable {
+        case smooth, organic, crisp
+        var id: String { rawValue }
+        var title: String { rawValue.capitalized }
+        var engine: Int32 { self == .organic ? 1 : self == .crisp ? 2 : 0 }
+    }
+
+    enum Quality: String, Codable, CaseIterable, Identifiable {
+        case fast, standard, high
+        var id: String { rawValue }
+        var title: String { self == .fast ? "Fast" : self == .standard ? "Standard" : "High" }
+        /// Extra diffusion steps for turbo models (0 = model default).
+        func steps(turbo: Bool) -> Int32 {
+            switch self {
+            case .fast: return turbo ? 6 : 30
+            case .standard: return 0
+            case .high: return turbo ? 12 : 64
+            }
+        }
+    }
+
+    static let defaults = SoundSettings()
 }
 
 struct SongResult {
@@ -169,14 +204,18 @@ final class SongEngine: @unchecked Sendable {
                     duration: Float(request.duration),
                     bpm: Int32(request.bpm),
                     seed: request.seed,
-                    inference_steps: 0,
+                    inference_steps: request.sound.quality.steps(turbo: request.turbo),
                     enhance_prompt: request.enhancePrompt ? 1 : 0,
                     src_audio_path: c(request.source?.path),
                     task: request.task,
                     cover_strength: request.coverStrength,
                     cover_noise: request.coverNoise,
                     repaint_start: request.repaintStart,
-                    repaint_end: request.repaintEnd
+                    repaint_end: request.repaintEnd,
+                    weirdness: Float(request.sound.weirdness),
+                    style_influence: Float(request.sound.styleInfluence),
+                    clarity: Float(request.sound.clarity),
+                    sampler: request.sound.sampler.engine
                 )
                 // ace_song_info is large (lyrics buffer); keep it on the heap.
                 let info = UnsafeMutablePointer<ace_song_info>.allocate(capacity: 1)

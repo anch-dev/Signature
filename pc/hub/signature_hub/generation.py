@@ -13,6 +13,7 @@ from typing import Optional
 import httpx
 
 from . import config
+from .yue2 import runner as yue2_runner
 from .supervisor import Supervisor
 
 
@@ -34,6 +35,9 @@ class GenJob:
     cover_strength: float = 0.7
     repaint_start: float = 0.0
     repaint_end: float = -1.0
+    sound: dict = field(default_factory=dict)   # weirdness / style_influence / clarity / sampler / quality
+    engine: str = "acestep"         # acestep | yue2 (experimental)
+    cot: str = "off"                # yue2: off | melody | full (ABC planning)
     status: str = "queued"          # queued | starting | running | done | failed
     message: str = ""
     created: float = field(default_factory=time.time)
@@ -61,6 +65,34 @@ _STOP = {"the", "and", "with", "song", "music", "about", "for", "that", "this", 
 def _keywords(text: str) -> list[str]:
     import re
     return [w for w in re.findall(r"[a-z0-9&]+", text.lower()) if len(w) >= 3 and w not in _STOP]
+
+
+def sound_params(sound: dict, turbo: bool = True) -> dict:
+    """Map the app's 0..1 sound sliders onto ACE-Step 1.5 API fields.
+    0.5 everywhere reproduces the official defaults (same mapping as the
+    on-device engine in ace_bridge.cpp)."""
+    s = sound or {}
+    w = min(1.0, max(0.0, float(s.get("weirdness", 0.5))))
+    si = min(1.0, max(0.0, float(s.get("style_influence", 0.5))))
+    c = min(1.0, max(0.0, float(s.get("clarity", 0.5))))
+    quality = s.get("quality", "standard")
+    out = {
+        "lm_temperature": round(0.55 + 0.60 * w, 3),
+        "lm_top_p": round(min(0.98, 0.81 + 0.18 * w), 3),
+        "lm_cfg_scale": round(1.2 + 2.6 * si, 3),
+        "infer_method": "sde" if s.get("sampler") == "organic" else "ode",
+    }
+    if turbo:
+        out["inference_steps"] = {"fast": 6, "high": 12}.get(quality, 8)
+        out["dcw_enabled"] = c > 0
+        out["dcw_mode"] = "double"
+        out["dcw_scaler"] = round(0.10 * c, 4)
+        out["dcw_high_scaler"] = round(0.04 * c, 4)
+    else:
+        out["inference_steps"] = {"fast": 30, "high": 64}.get(quality, 50)
+        out["guidance_scale"] = round(3.0 + 8.0 * si, 2)
+        out["dcw_enabled"] = False
+    return out
 
 
 def merge_caption(user: str, enhanced: str) -> str:
@@ -152,6 +184,9 @@ class Generator:
                 job.finished = time.time()
 
     async def _generate(self, job: GenJob) -> None:
+        if job.engine == "yue2":
+            await self._generate_yue2(job)
+            return
         job.status = "starting"
         job.message = "Waking up ACE-Step"
         mode_before = self.sup.mode
@@ -204,6 +239,7 @@ class Generator:
             if job.seed >= 0:
                 body["use_random_seed"] = False
                 body["seed"] = job.seed
+            body.update(sound_params(job.sound, turbo="turbo" in config.DIT_MODEL))
 
             task = self._unwrap(await client.post("/release_task", json=body))
             task_id = task["task_id"]
@@ -254,6 +290,38 @@ class Generator:
             job.file = str(out)
             job.status = "done"
             job.message = ""
+
+    async def _generate_yue2(self, job: GenJob) -> None:
+        job.status = "starting"
+        job.message = "Freeing the GPU for YuE2"
+        await self.sup.switch("idle")      # YuE2 needs the whole card
+        self.loaded_adapter = None
+        job.status = "running"
+        job.message = "Planning the song"
+
+        def on_line(line: str) -> None:
+            low = line.lower()
+            if "semantic" in low and "token" in low:
+                job.message = "Writing the music"
+            elif ".nar." in low or "nar." in low:
+                job.message = "Rendering audio"
+            elif "vae" in low and "decode" in low:
+                job.message = "Decoding"
+
+        out = config.SONGS / f"{job.id}.wav"
+        seed = await yue2_runner.run(style=job.caption, lyrics=job.lyrics, cot=job.cot, seed=job.seed,
+                              sound=job.sound, out=out, on_line=on_line)
+        try:
+            import wave
+            with wave.open(str(out)) as w:
+                secs = w.getnframes() / float(w.getframerate() or 1)
+        except Exception:
+            secs = 0.0
+        job.meta = {"bpm": 0, "key": "", "duration": round(secs, 2), "seed": seed, "model": "YuE2-3B",
+                    "lyrics": job.lyrics, "caption": job.caption}
+        job.file = str(out)
+        job.status = "done"
+        job.message = ""
 
     def audio_path(self, job_id: str) -> Optional[Path]:
         job = self.jobs.get(job_id)

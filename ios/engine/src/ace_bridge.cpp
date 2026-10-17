@@ -576,6 +576,16 @@ int ace_engine_generate(ace_engine *             e,
         req.lyrics = "[Instrumental]";
     }
     req.lm_mode         = LM_MODE_NAME_GENERATE;
+    // Sound controls. Defaults match the official ACE-Step 1.5 API
+    // (lm_temperature 0.85, lm_top_p 0.9, lm_cfg_scale 2.5).
+    {
+        const float w = r->weirdness >= 0 ? std::clamp(r->weirdness, 0.0f, 1.0f) : 0.5f;
+        const float si = r->style_influence >= 0 ? std::clamp(r->style_influence, 0.0f, 1.0f) : 0.5f;
+        req.lm_temperature = 0.55f + 0.60f * w;
+        req.lm_top_p       = std::min(0.98f, 0.81f + 0.18f * w);
+        req.lm_cfg_scale   = 1.2f + 2.6f * si;
+        req.solver         = r->sampler == ACE_SAMPLER_SDE ? "sde" : r->sampler == ACE_SAMPLER_DPM3M ? "dpm3m" : "euler";
+    }
     request_resolve_seed(&req);
     request_resolve_lm_seed(&req);
 
@@ -727,6 +737,29 @@ int ace_engine_generate(ace_engine *             e,
     // Turbo models default to 8 steps, SFT/Base to 50 (read from the model's metadata).
     const DiTMeta * meta  = store_dit_meta(e->store, m->dit_path);
     const int       steps = req.inference_steps > 0 ? req.inference_steps : (meta && !meta->is_turbo ? 50 : 8);
+    {
+        const bool  turbo = !meta || meta->is_turbo;
+        const float si    = r->style_influence >= 0 ? std::clamp(r->style_influence, 0.0f, 1.0f) : 0.5f;
+        planned.solver    = req.solver;
+        if (turbo) {
+            // DCW "double" at 0.05 / 0.02 is what the official pipeline runs on
+            // turbo models; without it vocals come out thinner and more synthetic.
+            const float c          = r->clarity >= 0 ? std::clamp(r->clarity, 0.0f, 1.0f) : 0.5f;
+            planned.dcw_mode        = "double";
+            planned.dcw_scaler      = 0.10f * c;
+            planned.dcw_high_scaler = 0.04f * c;
+        } else {
+            // SFT / base: real CFG (official default 7.0); DCW distorts these models.
+            planned.guidance_scale  = 3.0f + 8.0f * si;
+            planned.dcw_scaler      = 0.0f;
+            planned.dcw_high_scaler = 0.0f;
+        }
+        if (vb.on) {
+            fprintf(stderr, "[Signature] sound: temp=%.2f top_p=%.2f lm_cfg=%.2f solver=%s dcw=%.3f/%.3f guidance=%.1f steps=%d\n",
+                    req.lm_temperature, req.lm_top_p, req.lm_cfg_scale, planned.solver.c_str(), planned.dcw_scaler,
+                    planned.dcw_high_scaler, planned.guidance_scale, steps);
+        }
+    }
     Tick      dt{ progress, user, ACE_STAGE_DIFFUSION, (float) steps, &peaks };
     report(progress, user, ACE_STAGE_DIFFUSION, 0.0f, &cancelled, &peaks);
     AceSynthJob * job = cancelled ? nullptr

@@ -247,6 +247,22 @@ final class ModelManager: ObservableObject {
 
     func downloadMissing() { missing.forEach(download) }
 
+    // MARK: YuE2 (experimental, on-device)
+
+    var yue2Dir: URL { directory.appendingPathComponent(Yue2Catalog.folder, isDirectory: true) }
+    var yue2Missing: [ModelFile] { Yue2Catalog.files.filter { !installed.contains($0.id) } }
+    var yue2Ready: Bool { yue2Missing.isEmpty }
+    var yue2Downloading: Bool { yue2Missing.contains { progress[$0.id] != nil } }
+    var yue2Progress: Double {
+        let total = Double(Yue2Catalog.bytes)
+        let done = Yue2Catalog.files.reduce(0.0) { acc, f in
+            acc + Double(f.bytes) * (installed.contains(f.id) ? 1 : (progress[f.id] ?? 0))
+        }
+        return total > 0 ? done / total : 0
+    }
+    func downloadYue2() { yue2Missing.forEach(download) }
+    func deleteYue2() { Yue2Catalog.files.forEach(delete) }
+
     func cancel(_ f: ModelFile) {
         BackgroundDownloader.shared.cancel(f.id)
         progress[f.id] = nil
@@ -268,7 +284,7 @@ final class ModelManager: ObservableObject {
 
     func filesOnDisk() -> [DiskFile] {
         let fm = FileManager.default
-        let names = (try? fm.contentsOfDirectory(atPath: directory.path)) ?? []
+        let names = (fm.enumerator(atPath: directory.path)?.allObjects as? [String]) ?? []
         return names.filter { $0.hasSuffix(".gguf") }.sorted().map { n in
             let size = (try? fm.attributesOfItem(atPath: directory.appendingPathComponent(n).path)[.size] as? NSNumber)?.int64Value ?? 0
             let expected = Catalog.allFiles.first { $0.id == n }?.bytes
@@ -361,7 +377,7 @@ final class BackgroundDownloader: NSObject, URLSessionDownloadDelegate, @uncheck
     func start(_ f: ModelFile) {
         session.getAllTasks { [self] tasks in
             if tasks.contains(where: { $0.taskDescription == f.id && $0.state == .running }) { return }
-            let resume = resumeDir.appendingPathComponent(f.id)
+            let resume = resumeDir.appendingPathComponent(f.id.replacingOccurrences(of: "/", with: "_"))
             let task: URLSessionDownloadTask
             if let data = try? Data(contentsOf: resume) {
                 try? FileManager.default.removeItem(at: resume)
@@ -379,7 +395,7 @@ final class BackgroundDownloader: NSObject, URLSessionDownloadDelegate, @uncheck
         session.getAllTasks { tasks in
             tasks.filter { $0.taskDescription == name }.forEach { $0.cancel() }
         }
-        try? FileManager.default.removeItem(at: resumeDir.appendingPathComponent(name))
+        try? FileManager.default.removeItem(at: resumeDir.appendingPathComponent(name.replacingOccurrences(of: "/", with: "_")))
     }
 
     private func notify(_ body: @escaping @MainActor (ModelManager) -> Void) {
@@ -416,6 +432,7 @@ final class BackgroundDownloader: NSObject, URLSessionDownloadDelegate, @uncheck
         } else {
             do {
                 try? FileManager.default.removeItem(at: dest)
+                try? FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try FileManager.default.moveItem(at: location, to: dest)
                 let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)?.int64Value ?? 0
                 if let expected = Catalog.allFiles.first(where: { $0.id == name })?.bytes, size != expected {
@@ -433,7 +450,7 @@ final class BackgroundDownloader: NSObject, URLSessionDownloadDelegate, @uncheck
         guard let error, let name = task.taskDescription else { return }
         let ns = error as NSError
         if let data = ns.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
-            try? data.write(to: resumeDir.appendingPathComponent(name))
+            try? data.write(to: resumeDir.appendingPathComponent(name.replacingOccurrences(of: "/", with: "_")))
         }
         let cancelled = ns.code == NSURLErrorCancelled && ns.userInfo[NSURLSessionDownloadTaskResumeData] == nil
         notify { $0.didFinish(name, error: cancelled ? nil : "Paused: \(error.localizedDescription). Tap to resume.") }

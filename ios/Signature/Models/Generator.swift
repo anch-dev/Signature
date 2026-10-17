@@ -6,6 +6,25 @@ enum GenTarget: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// Which music model family makes the song.
+enum MusicEngine: String, CaseIterable, Identifiable {
+    case acestep, yue2
+    var id: String { rawValue }
+    var title: String { self == .acestep ? "ACE-Step 1.5" : "YuE2" }
+    var blurb: String {
+        self == .acestep
+            ? "Fast, flexible. Simple prompts, covers, your styles."
+            : "Lyrics-first songs with melody planning. Experimental, slow, non-commercial license."
+    }
+}
+
+/// YuE2's optional symbolic (ABC score) planning before the music tokens.
+enum Yue2Planning: String, CaseIterable, Identifiable {
+    case off, melody, full
+    var id: String { rawValue }
+    var title: String { self == .off ? "Off" : self == .melody ? "Melody" : "Full score" }
+}
+
 enum CreateMode: String, CaseIterable, Identifiable {
     case simple, custom, cover
     var id: String { rawValue }
@@ -43,6 +62,23 @@ final class Generator: ObservableObject {
     @Published var pcStyle: String?         // PC style (by name, lives on the Hub)
     @Published var adapterScale: Double = 1.0
     @Published var lockSeed = false
+    @Published var engine: MusicEngine = MusicEngine(rawValue: UserDefaults.standard.string(forKey: "engine") ?? "") ?? .acestep {
+        didSet {
+            UserDefaults.standard.set(engine.rawValue, forKey: "engine")
+            if engine == .yue2 && mode != .custom { mode = .custom }
+        }
+    }
+    @Published var yuePlanning: Yue2Planning = Yue2Planning(rawValue: UserDefaults.standard.string(forKey: "yuePlanning") ?? "") ?? .off {
+        didSet { UserDefaults.standard.set(yuePlanning.rawValue, forKey: "yuePlanning") }
+    }
+    @Published var sound: SoundSettings = Generator.loadSound() {
+        didSet { if let d = try? JSONEncoder().encode(sound) { UserDefaults.standard.set(d, forKey: "sound") } }
+    }
+    static func loadSound() -> SoundSettings {
+        guard let d = UserDefaults.standard.data(forKey: "sound"),
+              let s = try? JSONDecoder().decode(SoundSettings.self, from: d) else { return .defaults }
+        return s
+    }
     @Published var seedText = ""
     // Cover / remix / repaint
     @Published var coverSource: URL?
@@ -221,6 +257,10 @@ final class Generator: ObservableObject {
 
     func start(models: ModelManager, library: Library) {
         guard !running else { return }
+        if engine == .yue2 {
+            startYue2(models: models, library: library)
+            return
+        }
         guard let paths = models.paths(forceSongwriter: mode == .simple) else {
             error = "Download the models first."
             return
@@ -237,6 +277,8 @@ final class Generator: ObservableObject {
             repaintStart: Float(repaintStart), repaintEnd: Float(repaintEnd))
         var req = request
         req.enhancePrompt = enhancePrompt && mode != .cover
+        req.sound = sound
+        req.turbo = models.music.steps != 50
         let options = models.engineOptions
         let modelName = models.music.name
 
@@ -308,19 +350,31 @@ final class Generator: ObservableObject {
             error = HubError.notPaired.localizedDescription
             return
         }
-        guard let p = prepare(songwriterAvailable: true) else { return }
+        let yue = engine == .yue2
+        guard let p = yue ? yuePrepared() : prepare(songwriterAvailable: true) else { return }
         struct Body: Encodable {
             let caption: String; let lyrics: String; let duration: Double; let language: String
             let style: String?; let style_scale: Double; let seed: Int64; let simple: Bool; let enhance: Bool
             var source: String?; let task: String; let cover_strength: Double
             let repaint_start: Double; let repaint_end: Double
+            var sound: RemoteSound? = nil
+            var engine = "acestep"
+            var cot = "off"
+        }
+        struct RemoteSound: Encodable {
+            let weirdness: Double; let style_influence: Double; let clarity: Double
+            let sampler: String; let quality: String
         }
         let body = Body(caption: p.caption, lyrics: p.lyrics, duration: min(duration, 480), language: language,
                         style: pcStyle, style_scale: adapterScale, seed: lockSeed ? Int64(seedText) ?? -1 : -1,
                         simple: mode == .simple && !instrumental, enhance: enhancePrompt && mode != .cover, source: nil,
                         task: mode == .cover ? coverTask.rawValue : "new", cover_strength: coverStrength,
-                        repaint_start: repaintStart, repaint_end: repaintEnd)
-        let source = mode == .cover ? coverSource : nil
+                        repaint_start: repaintStart, repaint_end: repaintEnd,
+                        sound: RemoteSound(weirdness: sound.weirdness, style_influence: sound.styleInfluence,
+                                           clarity: sound.clarity, sampler: sound.sampler.rawValue,
+                                           quality: sound.quality.rawValue),
+                        engine: engine.rawValue, cot: yuePlanning.rawValue)
+        let source = mode == .cover && !yue ? coverSource : nil
         begin("Sending to \(pcName)")
 
         remoteTask = Task {
@@ -339,7 +393,8 @@ final class Generator: ObservableObject {
                     job = try await client.get("/api/jobs/\(job.id)", as: RemoteJob.self)
                     statusText = job.message.isEmpty ? job.status.capitalized : job.message
                     // ACE-Step doesn't report fine progress; estimate from typical turbo speed on a 3080 Ti.
-                    let expected = max(20, job.duration * 0.6)
+                    let expected = yue ? max(90, Double(p.lyrics.split(separator: " ").count) * 1.2 + 60)
+                                       : max(20, job.duration * 0.6)
                     progress = min(0.95, Double(job.elapsed) / expected)
                     eta = max(3, expected - Double(job.elapsed))
                 }
@@ -347,14 +402,14 @@ final class Generator: ObservableObject {
                     throw HubError.server(job.message.isEmpty ? "Generation failed on the PC" : job.message)
                 }
                 statusText = "Downloading"
-                let (out, fileName) = library.newFileURL(title: p.title, ext: "mp3")
+                let (out, fileName) = library.newFileURL(title: p.title, ext: yue ? "wav" : "mp3")
                 try await client.download("/api/jobs/\(job.id)/audio", to: out)
                 let m = job.meta
                 let song = Song(
                     id: UUID(), title: p.title, caption: p.caption, lyrics: m?.lyrics ?? p.lyrics, adapter: pcStyle,
                     seed: m?.seed ?? -1, bpm: m?.bpm ?? 0, key: m?.key ?? "",
                     duration: m?.duration ?? job.duration, created: Date(), fileName: fileName, madeOn: pcName,
-                    model: "ACE-Step 1.5 (PC)", prompt: mode == .simple ? songDescription : style)
+                    model: yue ? "YuE2 (PC)" : "ACE-Step 1.5 (PC)", prompt: mode == .simple ? songDescription : style)
                 library.add(song)
                 lastSong = song
                 if let s = m?.seed { seedText = String(s) }
@@ -362,6 +417,79 @@ final class Generator: ObservableObject {
             } catch is CancellationError {
             } catch {
                 self.error = error.localizedDescription
+            }
+        }
+    }
+
+    // MARK: YuE2 on this device (experimental)
+
+    private func yuePrepared() -> Prepared? {
+        let s = style.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else {
+            error = "YuE2 needs a style, e.g. \"English, indie pop, acoustic guitar, warm female vocal\"."
+            return nil
+        }
+        let words = lyrics.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard instrumental || !words.isEmpty else {
+            error = "YuE2 sings your lyrics. Add lyrics with [verse] / [chorus] sections, or turn on Instrumental."
+            return nil
+        }
+        let t = title.isEmpty ? Self.autoTitle(s) : title
+        return Prepared(caption: s, lyrics: instrumental ? "" : words, title: t)
+    }
+
+    private func startYue2(models: ModelManager, library: Library) {
+        guard Yue2Engine.shared.isIncluded else {
+            error = Yue2Engine.Failure.notIncluded.localizedDescription
+            return
+        }
+        guard models.yue2Ready else {
+            error = "Download YuE2 first (Model → YuE2)."
+            return
+        }
+        guard let p = yuePrepared() else { return }
+        let budget = Device.budget
+        if Yue2Catalog.estimatedPeak > budget {
+            LogCapture.shared.log(String(format: "YuE2: needs ~%.1f GB, %.1f GB available; trying anyway (experimental)",
+                                         Double(Yue2Catalog.estimatedPeak) / 1_073_741_824, Device.budgetGB))
+        }
+        let (out, fileName) = library.newFileURL(title: p.title, ext: "wav")
+        let req = Yue2Engine.Request(style: p.caption, lyrics: p.lyrics, cot: yuePlanning.rawValue,
+                                     seed: lockSeed ? Int64(seedText) ?? -1 : -1, sound: sound)
+        begin("YuE2 is writing the song")
+        markInFlight("YuE2, \(p.title)")
+        LogCapture.shared.log("Start: YuE2 (on device), planning \(yuePlanning.rawValue)")
+        // No fine progress from audio.cpp: estimate ~4x real time for a short song.
+        let words = max(20, p.lyrics.split(separator: " ").count)
+        let expected = Double(words) * 2.5 + 60
+        let started = Date()
+        let tick = Task { @MainActor [weak self] in
+            while let self, self.running {
+                let t = Date().timeIntervalSince(started)
+                self.progress = min(0.95, t / expected)
+                self.eta = max(5, expected - t)
+                self.statusText = t < expected * 0.5 ? "YuE2 is writing the song" : "YuE2 is rendering audio"
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+        Task {
+            defer { tick.cancel(); end() }
+            do {
+                let seconds = try await Yue2Engine.shared.generate(
+                    req, modelDir: models.yue2Dir, mainGGUF: Yue2Catalog.main.fileName,
+                    vaeGGUF: Yue2Catalog.vae.fileName, output: out)
+                let song = Song(
+                    id: UUID(), title: p.title, caption: p.caption,
+                    lyrics: p.lyrics.isEmpty ? "[Instrumental]" : p.lyrics, adapter: nil,
+                    seed: req.seed, bpm: 0, key: "", duration: seconds, created: Date(), fileName: fileName,
+                    madeOn: "iPhone", model: "YuE2 (experimental)", prompt: style)
+                library.add(song)
+                lastSong = song
+                progress = 1
+            } catch {
+                try? FileManager.default.removeItem(at: out)
+                self.error = error.localizedDescription
+                LogCapture.shared.log("Failed: \(error.localizedDescription)")
             }
         }
     }

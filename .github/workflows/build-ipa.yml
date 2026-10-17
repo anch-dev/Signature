@@ -11,7 +11,46 @@ permissions:
   contents: write   # lets tagged builds attach the IPA to a GitHub Release
 
 jobs:
+  # audio.cpp (YuE2, experimental) for iOS. Optional: if it fails, the IPA is
+  # built without on-device YuE2.
+  audiocpp:
+    runs-on: macos-15
+    timeout-minutes: 90
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app || true
+      - name: Cache AudioCpp.framework
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ios/Frameworks/AudioCpp.framework
+          key: audiocpp-${{ hashFiles('ios/scripts/build-audiocpp.sh') }}
+      - name: Build audio.cpp for iOS
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          mkdir -p build
+          if ! bash scripts/build-audiocpp.sh > build/audiocpp.log 2>&1; then
+            grep -E "error:|Error |fatal error" build/audiocpp.log | sort -u | head -40 \
+              | while IFS= read -r line; do echo "::error::${line:0:400}"; done || true
+            tail -20 build/audiocpp.log | while IFS= read -r line; do echo "::error::tail: ${line:0:400}"; done
+            exit 1
+          fi
+          tail -8 build/audiocpp.log
+      - name: Upload framework
+        uses: actions/upload-artifact@v4
+        with:
+          name: AudioCpp-framework
+          path: ios/Frameworks/AudioCpp.framework
+
   ipa:
+    needs: audiocpp
+    if: ${{ !cancelled() }}
     runs-on: macos-15
     timeout-minutes: 90
     defaults:
@@ -81,9 +120,26 @@ jobs:
           fi
           test -d build/dd/Build/Products/Release-iphoneos/Signature.app
 
+      - name: Get AudioCpp.framework (optional)
+        id: audiocpp
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: AudioCpp-framework
+          path: ios/build/AudioCpp.framework
+
       - name: Package IPA
         run: |
           APP=build/dd/Build/Products/Release-iphoneos/Signature.app
+          if [ -f build/AudioCpp.framework/AudioCpp ]; then
+            mkdir -p "$APP/Frameworks"
+            rm -rf "$APP/Frameworks/AudioCpp.framework"
+            cp -R build/AudioCpp.framework "$APP/Frameworks/AudioCpp.framework"
+            ldid -S "$APP/Frameworks/AudioCpp.framework/AudioCpp"
+            echo "On-device YuE2 included ($(du -h "$APP/Frameworks/AudioCpp.framework/AudioCpp" | cut -f1))"
+          else
+            echo "::warning::AudioCpp.framework not built; IPA has no on-device YuE2"
+          fi
           # Fail loudly if the on-device engine didn't make it into the binary.
           ls -lh "$APP/Signature"
           strings "$APP/Signature" | grep -q "Synth-Load" || { echo "::error::acestep engine missing from app binary"; exit 1; }
