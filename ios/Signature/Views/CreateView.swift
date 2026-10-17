@@ -61,7 +61,7 @@ struct CreateView: View {
                              status: gen.etaText.map { "\(gen.statusText) · \($0)" } ?? gen.statusText,
                              enabled: ready, action: create, cancel: gen.cancel)
                     .padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(Theme.bg.opacity(0.92))
+                    .background(.ultraThinMaterial)
             }
             .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showModels) { ModelPickerSheet() }
@@ -94,7 +94,7 @@ struct CreateView: View {
 
     private var header: some View {
         HStack(alignment: .center) {
-            Text("Create").font(.largeTitle.bold()).foregroundStyle(Theme.text)
+            Text("Create").font(.system(size: 34, weight: .heavy, design: .rounded)).foregroundStyle(Theme.text)
             Spacer()
             NavigationLink { TerminalView() } label: {
                 Image(systemName: "terminal")
@@ -147,7 +147,7 @@ struct CreateView: View {
             } else {
                 Button { models.downloadMissing() } label: {
                     Text("Download").font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
-                        .background(Capsule().fill(Color.white)).foregroundStyle(.black)
+                        .background(Capsule().fill(Theme.inverse)).foregroundStyle(Theme.onInverse)
                 }
                 .buttonStyle(.plain)
             }
@@ -331,7 +331,7 @@ struct CreateView: View {
                     } label: {
                         Text(gen.coverSource == nil ? "Choose" : "Change").font(.subheadline.weight(.semibold))
                             .padding(.horizontal, 12).padding(.vertical, 7)
-                            .background(Capsule().fill(Color.white)).foregroundStyle(.black)
+                            .background(Capsule().fill(Theme.inverse)).foregroundStyle(Theme.onInverse)
                     }
                 }
                 .card(padding: 12)
@@ -464,7 +464,7 @@ struct CreateView: View {
                     SongArt(seed: seed, size: 58).clipShape(Circle())
                     Text(String(name.prefix(2)).uppercased()).font(.headline.weight(.heavy)).foregroundStyle(.white)
                 }
-                .overlay(Circle().stroke(selected ? Color.white : Color.clear, lineWidth: 2.5).padding(-3))
+                .overlay(Circle().stroke(selected ? Theme.text : Color.clear, lineWidth: 2.5).padding(-3))
                 Text(name).font(.caption).foregroundStyle(selected ? Theme.text : Theme.muted).lineLimit(1).frame(maxWidth: 72)
             }
         }
@@ -541,7 +541,7 @@ struct LibraryPicker: View {
                                      caption: s.caption, lyrics: s.lyrics)
                     dismiss()
                 } label: { SongRow(song: s, playing: false) }
-                .listRowBackground(Theme.bg)
+                .listRowBackground(Color.clear)
             }
             .listStyle(.plain)
             .screen()
@@ -549,6 +549,5 @@ struct LibraryPicker: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Cancel") { dismiss() } }
         }
-        .preferredColorScheme(.dark)
     }
 }

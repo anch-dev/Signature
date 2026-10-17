@@ -93,7 +93,6 @@ struct ModelPickerSheet: View {
             .toolbar { Button("Done") { dismiss() }.tint(Theme.accent) }
         }
         .presentationDetents([.medium, .large])
-        .preferredColorScheme(.dark)
     }
 }
 
@@ -181,6 +180,7 @@ struct DownloadedModelsSection: View {
         } footer: {
             Text("A filled circle means the file is used by your current setup. Long-press any file to delete it.")
         }
+        .themedRow()
     }
 }
 
@@ -393,8 +393,8 @@ struct ModelsView: View {
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
-            .foregroundStyle(selected ? Color.black : Theme.text)
-            .background(RoundedRectangle(cornerRadius: 12).fill(selected ? Color.white : Theme.cardHi))
+            .foregroundStyle(selected ? Theme.onInverse : Theme.text)
+            .background(RoundedRectangle(cornerRadius: 12).fill(selected ? Theme.inverse : Theme.cardHi))
             .overlay(RoundedRectangle(cornerRadius: 12).stroke(Theme.stroke))
         }
         .buttonStyle(.plain)
@@ -416,6 +416,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                AppearanceSection()
                 DownloadedModelsSection()
 
                 Section {
@@ -428,6 +429,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("Every ACE-Step 1.5 model, in every size, with how well it fits this iPhone.")
                 }
+                .themedRow()
 
                 Section {
                     Picker("Performance", selection: $models.performance) {
@@ -446,6 +448,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("Lite uses less memory (shorter songs, smaller working buffers) and turns on automatically when iOS gives Signature under 3 GB, as on 4 GB iPhones. GPU is fastest; CPU uses the same memory but is slower. Mapping reads model weights straight from storage instead of copying them (CPU only; on the GPU weights are always copied).\n\nLow memory streams the music model from storage one layer at a time, like ComfyUI's low-VRAM offload: models bigger than this iPhone's memory can still run, several times slower. “When needed” only does it for models that don't fit.")
                 }
+                .themedRow()
 
                 Section {
                     LabeledContent("Memory for Signature", value: String(format: "%.1f GB", Device.budgetGB))
@@ -478,6 +481,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("Peak memory per stage helps tune Lite mode. If a test fails, switch to Lite or a smaller model size.")
                 }
+                .themedRow()
 
                 Section {
                     ForEach(adapters.adapters, id: \.self) { url in Text(AdapterStore.name(url)) }
@@ -493,6 +497,7 @@ struct SettingsView: View {
                 } footer: {
                     Text("Styles you train on a PC, downloaded from the PC tab or imported as .safetensors.")
                 }
+                .themedRow()
 
                 Section {
                     Toggle("Verbose logging", isOn: $log.verbose)
@@ -504,12 +509,14 @@ struct SettingsView: View {
                 } footer: {
                     Text("Verbose adds every request, stage timing, memory use, download progress and PC call to the log. Logs are saved in Files → Signature → Logs for 7 days. Send them when something goes wrong.")
                 }
+                .themedRow()
 
                 Section("About") {
                     LabeledContent("Version", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")
                     Link("ACE-Step 1.5", destination: URL(string: "https://github.com/ace-step/ACE-Step-1.5")!)
                     Link("Source code", destination: URL(string: "https://github.com/anch-dev/Signature")!)
                 }
+                .themedRow()
             }
             .screen()
             .navigationTitle("Settings")
@@ -561,7 +568,7 @@ struct ReadinessCard: View {
                 Button { models.downloadMissing() } label: {
                     Text("Download missing (\(ModelManager.format(models.missingBytes)))")
                         .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
-                        .background(Capsule().fill(Color.white)).foregroundStyle(.black)
+                        .background(Capsule().fill(Theme.inverse)).foregroundStyle(Theme.onInverse)
                 }
                 .buttonStyle(.plain)
             }
@@ -596,6 +603,7 @@ struct FilesOnDiskView: View {
             } footer: {
                 Text(models.directory.path).font(.caption2.monospaced())
             }
+            .themedRow()
         }
         .screen()
         .navigationTitle("Files on this iPhone")
@@ -638,11 +646,47 @@ struct RecommendedCard: View {
                 } label: {
                     Text(missing.isEmpty ? "Use this setup" : "Use this setup · download \(ModelManager.format(bytes))")
                         .font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity).padding(.vertical, 10)
-                        .background(Capsule().fill(Color.white)).foregroundStyle(.black)
+                        .background(Capsule().fill(Theme.inverse)).foregroundStyle(Theme.onInverse)
                 }
                 .buttonStyle(.plain)
             }
         }
         .card()
+    }
+}
+
+
+/// Settings → Appearance: theme swatches.
+struct AppearanceSection: View {
+    @AppStorage("appTheme") private var themeID = "dusk"
+
+    var body: some View {
+        Section {
+            HStack(spacing: 12) {
+                ForEach(Palette.all, id: \.id) { p in
+                    Button { withAnimation { themeID = p.id } } label: {
+                        VStack(spacing: 6) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(LinearGradient(colors: [p.bgTop, p.bgBottom], startPoint: .top, endPoint: .bottom))
+                                Capsule().fill(LinearGradient(colors: p.gradient, startPoint: .leading, endPoint: .trailing))
+                                    .frame(width: 34, height: 8)
+                            }
+                            .frame(height: 56)
+                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .stroke(themeID == p.id ? Theme.text : Theme.stroke, lineWidth: themeID == p.id ? 2 : 1))
+                            Text(p.name).font(.caption.weight(themeID == p.id ? .semibold : .regular))
+                                .foregroundStyle(themeID == p.id ? Theme.text : Theme.muted)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Appearance")
+        }
+        .themedRow()
     }
 }

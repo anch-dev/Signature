@@ -1,23 +1,123 @@
 import SwiftUI
+import UIKit
 
-// Dark, music-app look (Suno / Riffusion style): near-black canvas, soft
-// raised cards, one warm gradient for primary actions and artwork.
+// MARK: - Themes
+
+/// One colour scheme for the whole app. Picked in Settings → Appearance.
+struct Palette: Equatable {
+    let id: String
+    let name: String
+    let dark: Bool
+    let bgTop: Color
+    let bgBottom: Color
+    let glow: Color            // soft light behind the top of each screen
+    let card: Color
+    let cardHi: Color
+    let stroke: Color
+    let text: Color
+    let muted: Color
+    let faint: Color
+    let accent: Color
+    let inverse: Color         // selected pill / primary button fill
+    let onInverse: Color
+    let gradient: [Color]
+}
+
+private func rgb(_ hex: UInt32, _ a: Double = 1) -> Color {
+    Color(red: Double((hex >> 16) & 0xFF) / 255, green: Double((hex >> 8) & 0xFF) / 255,
+          blue: Double(hex & 0xFF) / 255, opacity: a)
+}
+
+extension Palette {
+    static let dusk = Palette(
+        id: "dusk", name: "Dusk", dark: true,
+        bgTop: rgb(0x2A1F55), bgBottom: rgb(0x130F2B), glow: rgb(0xF0386B, 0.28),
+        card: .white.opacity(0.075), cardHi: .white.opacity(0.13), stroke: .white.opacity(0.10),
+        text: .white, muted: .white.opacity(0.64), faint: .white.opacity(0.40),
+        accent: rgb(0xFF7A59), inverse: .white, onInverse: rgb(0x1E1640),
+        gradient: [rgb(0xFF8A4C), rgb(0xF0386B), rgb(0x7B3FF2)])
+
+    static let ocean = Palette(
+        id: "ocean", name: "Ocean", dark: true,
+        bgTop: rgb(0x0E3A4F), bgBottom: rgb(0x08192A), glow: rgb(0x3FD0C9, 0.24),
+        card: .white.opacity(0.075), cardHi: .white.opacity(0.13), stroke: .white.opacity(0.10),
+        text: .white, muted: .white.opacity(0.64), faint: .white.opacity(0.40),
+        accent: rgb(0x46D9C6), inverse: .white, onInverse: rgb(0x0B2233),
+        gradient: [rgb(0x3FD0C9), rgb(0x3B82F6), rgb(0x8B5CF6)])
+
+    static let daylight = Palette(
+        id: "daylight", name: "Daylight", dark: false,
+        bgTop: rgb(0xFFF4EC), bgBottom: rgb(0xF1EAF8), glow: rgb(0xFF8A4C, 0.20),
+        card: .white.opacity(0.88), cardHi: rgb(0xF3ECF6), stroke: .black.opacity(0.07),
+        text: rgb(0x1E1A26), muted: rgb(0x1E1A26, 0.58), faint: rgb(0x1E1A26, 0.38),
+        accent: rgb(0xE5533A), inverse: rgb(0x1E1A26), onInverse: .white,
+        gradient: [rgb(0xFF8A4C), rgb(0xF0386B), rgb(0x7B3FF2)])
+
+    static let midnight = Palette(
+        id: "midnight", name: "Midnight", dark: true,
+        bgTop: rgb(0x0B0B10), bgBottom: rgb(0x0B0B10), glow: .clear,
+        card: rgb(0x17171F), cardHi: rgb(0x21212B), stroke: .white.opacity(0.08),
+        text: .white, muted: .white.opacity(0.55), faint: .white.opacity(0.32),
+        accent: rgb(0xFF6B3D), inverse: .white, onInverse: .black,
+        gradient: [rgb(0xFF7A1A), rgb(0xFF2E78), rgb(0x7A2EF7)])
+
+    static let all: [Palette] = [.dusk, .ocean, .daylight, .midnight]
+    static func named(_ id: String) -> Palette { all.first { $0.id == id } ?? .dusk }
+}
+
 enum Theme {
-    static let bg = Color(red: 0.04, green: 0.04, blue: 0.06)
-    static let card = Color(red: 0.09, green: 0.09, blue: 0.12)
-    static let cardHi = Color(red: 0.13, green: 0.13, blue: 0.17)
-    static let stroke = Color.white.opacity(0.08)
-    static let text = Color.white
-    static let muted = Color.white.opacity(0.55)
-    static let faint = Color.white.opacity(0.32)
-    static let accent = Color(red: 1.0, green: 0.42, blue: 0.24)
-    static let good = Color(red: 0.30, green: 0.85, blue: 0.55)
-    static let warn = Color(red: 1.0, green: 0.75, blue: 0.25)
-    static let bad = Color(red: 1.0, green: 0.36, blue: 0.40)
+    /// Set by the app root from Settings; the root rebuilds when it changes.
+    static var palette: Palette = .named(UserDefaults.standard.string(forKey: "appTheme") ?? "dusk")
 
-    static let gradient = LinearGradient(
-        colors: [Color(red: 1.0, green: 0.48, blue: 0.10), Color(red: 1.0, green: 0.18, blue: 0.47), Color(red: 0.48, green: 0.18, blue: 0.97)],
-        startPoint: .leading, endPoint: .trailing)
+    static var bg: Color { palette.bgTop }
+    static var card: Color { palette.card }
+    static var cardHi: Color { palette.cardHi }
+    static var stroke: Color { palette.stroke }
+    static var text: Color { palette.text }
+    static var muted: Color { palette.muted }
+    static var faint: Color { palette.faint }
+    static var accent: Color { palette.accent }
+    static var inverse: Color { palette.inverse }
+    static var onInverse: Color { palette.onInverse }
+    static let good = Color(red: 0.25, green: 0.80, blue: 0.52)
+    static let warn = Color(red: 0.98, green: 0.70, blue: 0.20)
+    static let bad = Color(red: 0.98, green: 0.34, blue: 0.40)
+
+    static var gradient: LinearGradient {
+        LinearGradient(colors: palette.gradient, startPoint: .leading, endPoint: .trailing)
+    }
+
+    /// Full-screen backdrop: vertical gradient with a soft coloured glow up top.
+    static var background: some View {
+        ZStack {
+            LinearGradient(colors: [palette.bgTop, palette.bgBottom], startPoint: .top, endPoint: .bottom)
+            RadialGradient(colors: [palette.glow, .clear], center: UnitPoint(x: 0.85, y: -0.05),
+                           startRadius: 10, endRadius: 420)
+        }
+        .ignoresSafeArea()
+    }
+
+    /// Navigation and tab bars: translucent so the backdrop shows through.
+    static func applyBarAppearance() {
+        let text = UIColor(palette.text)
+        let bar = UITabBarAppearance()
+        bar.configureWithDefaultBackground()
+        bar.backgroundEffect = UIBlurEffect(style: palette.dark ? .systemChromeMaterialDark : .systemChromeMaterialLight)
+        bar.backgroundColor = UIColor(palette.bgBottom).withAlphaComponent(0.55)
+        UITabBar.appearance().standardAppearance = bar
+        UITabBar.appearance().scrollEdgeAppearance = bar
+        let nav = UINavigationBarAppearance()
+        nav.configureWithTransparentBackground()
+        nav.titleTextAttributes = [.foregroundColor: text]
+        nav.largeTitleTextAttributes = [.foregroundColor: text]
+        UINavigationBar.appearance().standardAppearance = nav
+        UINavigationBar.appearance().scrollEdgeAppearance = nav
+        let compact = UINavigationBarAppearance()
+        compact.configureWithDefaultBackground()
+        compact.backgroundEffect = UIBlurEffect(style: palette.dark ? .systemChromeMaterialDark : .systemChromeMaterialLight)
+        compact.titleTextAttributes = [.foregroundColor: text]
+        UINavigationBar.appearance().compactAppearance = compact
+    }
 }
 
 struct CardStyle: ViewModifier {
@@ -25,8 +125,9 @@ struct CardStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(padding)
-            .background(Theme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Theme.stroke))
+            .background(Theme.card, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Theme.stroke))
+            .shadow(color: .black.opacity(Theme.palette.dark ? 0.18 : 0.06), radius: 12, y: 4)
     }
 }
 
@@ -35,8 +136,11 @@ extension View {
 
     func screen() -> some View {
         self.scrollContentBackground(.hidden)
-            .background(Theme.bg.ignoresSafeArea())
+            .background(Theme.background)
     }
+
+    /// Row background for Forms / Lists so they sit on the theme, not system grey.
+    func themedRow() -> some View { listRowBackground(Theme.card) }
 }
 
 struct SectionLabel: View {
@@ -66,9 +170,9 @@ struct Chip: View {
                 Text(title).font(.subheadline.weight(.medium))
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
-            .foregroundStyle(selected ? Color.black : Theme.text)
+            .foregroundStyle(selected ? Theme.onInverse : Theme.text)
             .background {
-                if selected { Capsule().fill(Color.white) } else { Capsule().fill(Theme.cardHi) }
+                if selected { Capsule().fill(Theme.inverse) } else { Capsule().fill(Theme.cardHi) }
             }
             .overlay(Capsule().stroke(selected ? Color.clear : Theme.stroke))
         }
@@ -92,8 +196,8 @@ struct PillPicker<T: Hashable & Identifiable>: View {
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
-                        .foregroundStyle(selection == o ? Color.black : Theme.muted)
-                        .background(selection == o ? Capsule().fill(Color.white) : Capsule().fill(Color.clear))
+                        .foregroundStyle(selection == o ? Theme.onInverse : Theme.muted)
+                        .background(selection == o ? Capsule().fill(Theme.inverse) : Capsule().fill(Color.clear))
                 }
                 .buttonStyle(.plain)
             }

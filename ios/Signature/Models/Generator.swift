@@ -214,7 +214,7 @@ final class Generator: ObservableObject {
         markInFlight(nil)
         running = false
         startedAt = nil
-        UIApplication.shared.isIdleTimerDisabled = false
+        UIApplication.shared.isIdleTimerDisabled = true  // the app never lets the phone auto-lock
     }
 
     // MARK: on the iPhone
@@ -386,7 +386,7 @@ final class Generator: ObservableObject {
         Task {
             defer {
                 testing = false
-                UIApplication.shared.isIdleTimerDisabled = false
+                UIApplication.shared.isIdleTimerDisabled = true  // the app never lets the phone auto-lock
                 try? FileManager.default.removeItem(at: out)
             }
             do {

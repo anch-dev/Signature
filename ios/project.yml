@@ -30,6 +30,9 @@ targets:
       - sdk: Metal.framework
       - sdk: Accelerate.framework
       - sdk: AVFoundation.framework
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     entitlements:
       path: Signature/Signature.entitlements
       properties:
@@ -38,7 +41,8 @@ targets:
       path: Signature/Info.plist
       properties:
         CFBundleDisplayName: Signature
-        UILaunchScreen: {}
+        UILaunchScreen:
+          UIColorName: LaunchBackground
         UIApplicationSupportsIndirectInputEvents: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIFileSharingEnabled: true

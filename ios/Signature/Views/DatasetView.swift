@@ -67,6 +67,7 @@ struct DatasetView: View {
                 songsSection(d)
             } else {
                 Section { ProgressView() }
+                .themedRow()
             }
         }
     }
@@ -84,6 +85,7 @@ struct DatasetView: View {
         } footer: {
             Text("Used as the caption for songs that don't have their own. Trigger word: \(name)")
         }
+        .themedRow()
     }
 
     private var uploadSection: some View {
@@ -96,6 +98,7 @@ struct DatasetView: View {
         } footer: {
             Text("Pick audio from Files (iCloud Drive, On My iPhone, USB). Only use music you own or have permission to train on.")
         }
+        .themedRow()
     }
 
     private func actionsSection(_ d: DatasetDetail) -> some View {
@@ -119,6 +122,7 @@ struct DatasetView: View {
         } footer: {
             Text(footer)
         }
+        .themedRow()
     }
 
     private func songsSection(_ d: DatasetDetail) -> some View {
@@ -129,6 +133,7 @@ struct DatasetView: View {
             }
             .onDelete { idx in deleteSongs(idx.map { d.items[$0] }) }
         }
+        .themedRow()
     }
 
     private func deleteSongs(_ doomed: [DatasetSong]) {
@@ -154,6 +159,7 @@ struct DatasetView: View {
                 } footer: {
                     Text("Defaults fit a 12 GB card (RTX 3080 Ti). ~800 epochs for 10–20 songs, fewer for big sets. Expect a few hours; you can close the app and check back.")
                 }
+                .themedRow()
                 Section {
                     Button {
                         showTrain = false
@@ -165,6 +171,7 @@ struct DatasetView: View {
                 } footer: {
                     Text("The PC pauses song generation and the Studio while it trains.")
                 }
+                .themedRow()
             }
             .navigationTitle("Train \(name)")
             .navigationBarTitleDisplayMode(.inline)
@@ -253,6 +260,7 @@ private struct SongEditor: View {
                     TextField("Leave empty to use the set's description", text: $caption, axis: .vertical)
                         .lineLimit(1...4)
                 }
+                .themedRow()
                 Section {
                     Toggle("Instrumental", isOn: $instrumental)
                     if !instrumental {
@@ -265,11 +273,13 @@ private struct SongEditor: View {
                 } footer: {
                     Text("Fix misheard words and add [Verse] / [Chorus] tags. Accurate lyrics teach the style much better.")
                 }
+                .themedRow()
                 if !song.bpm.isEmpty || !song.key.isEmpty {
                     Section("Detected") {
                         if !song.bpm.isEmpty { LabeledContent("BPM", value: song.bpm) }
                         if !song.key.isEmpty { LabeledContent("Key", value: song.key) }
                     }
+                    .themedRow()
                 }
             }
             .navigationTitle(song.name)

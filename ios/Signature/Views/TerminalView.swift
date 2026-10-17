@@ -49,7 +49,7 @@ struct TerminalView: View {
                 .onAppear { proxy.scrollTo("end") }
             }
         }
-        .background(Theme.bg.ignoresSafeArea())
+        .background(Theme.background)
         .navigationTitle("Terminal")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

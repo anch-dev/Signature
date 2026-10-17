@@ -40,6 +40,7 @@ struct PCView: View {
                 }
                 .padding(.vertical, 4)
             }
+            .themedRow()
             Section("Or enter it manually") {
                 TextField("Address, e.g. 192.168.1.20:8790", text: $address)
                     .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -52,6 +53,7 @@ struct PCView: View {
                 }
                 .disabled(address.isEmpty || token.isEmpty || pairing)
             }
+            .themedRow()
         }
     }
 
@@ -69,6 +71,7 @@ struct PCView: View {
                     hub.unpair()
                 }
             }
+            .themedRow()
         }
         .alert("New training set", isPresented: $newSet) {
             TextField("trigger word, e.g. anchstyle", text: $newName)
@@ -133,6 +136,7 @@ struct PCView: View {
         } footer: {
             Text("Only one thing uses the GPU at a time: generating for the phone, the Studio GUI, or training.")
         }
+        .themedRow()
     }
 
     private var datasetsSection: some View {
@@ -158,6 +162,7 @@ struct PCView: View {
         } footer: {
             Text("Upload 10–20+ of your own songs. Each set trains one style.")
         }
+        .themedRow()
     }
 
     private var stylesSection: some View {
@@ -188,6 +193,7 @@ struct PCView: View {
                 }
             }
         }
+        .themedRow()
     }
 
     private func download(_ s: RemoteStyle) async {
@@ -259,6 +265,7 @@ struct TrainingCard: View {
         } header: {
             Text(job.kind == "label" ? "Transcribing lyrics" : "Training")
         }
+        .themedRow()
     }
 
     private var color: Color {

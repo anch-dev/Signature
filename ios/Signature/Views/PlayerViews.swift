@@ -134,7 +134,7 @@ struct NowPlayingView: View {
                     }
                     VStack(spacing: 4) {
                         Slider(value: Binding(get: { player.time }, set: { player.seek($0) }),
-                               in: 0...max(player.length, 1)).tint(.white)
+                               in: 0...max(player.length, 1)).tint(Theme.text)
                         HStack {
                             Text(CreateView.time(player.time))
                             Spacer()
@@ -149,7 +149,7 @@ struct NowPlayingView: View {
                         }
                         Button { player.seek(min(player.length, player.time + 10)) } label: { Image(systemName: "goforward.10") }
                     }
-                    .font(.title).foregroundStyle(.white)
+                    .font(.title).foregroundStyle(Theme.text)
                     HStack(spacing: 10) {
                         ShareLink(item: library.url(for: s)) {
                             Label("Share", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity)
@@ -166,7 +166,7 @@ struct NowPlayingView: View {
                             Label("Files", systemImage: "folder").frame(maxWidth: .infinity)
                         }
                     }
-                    .buttonStyle(.bordered).tint(.white)
+                    .buttonStyle(.bordered).tint(Theme.text)
                     Button {
                         gen.prepareCover(source: library.url(for: s), name: s.title, duration: s.duration,
                                          caption: s.caption, lyrics: s.lyrics)
@@ -269,7 +269,7 @@ struct LibraryView: View {
                         ForEach(filtered) { s in
                             SongRow(song: s, playing: player.current == s.id && player.isPlaying)
                                 .onTapGesture { player.play(s, library: library) }
-                                .listRowBackground(Theme.bg)
+                                .listRowBackground(Color.clear)
                                 .listRowSeparatorTint(Theme.stroke)
                                 .contextMenu {
                                     ShareLink(item: library.url(for: s)) { Label("Share", systemImage: "square.and.arrow.up") }

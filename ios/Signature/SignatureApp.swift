@@ -3,6 +3,14 @@ import SwiftUI
 import UIKit
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication,
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        // Never let the iPhone auto-lock while Signature is open: a locked
+        // screen suspends GPU work mid-song.
+        application.isIdleTimerDisabled = true
+        return true
+    }
+
     /// iOS relaunches the app in the background when model downloads finish.
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
                      completionHandler: @escaping () -> Void) {
@@ -25,6 +33,7 @@ struct SignatureApp: App {
     @StateObject private var hub = HubStore()
     @Environment(\.scenePhase) private var phase
     @State private var tab = 0
+    @AppStorage("appTheme") private var themeID = "dusk"
 
     init() {
         LogCapture.shared.start()
@@ -34,23 +43,12 @@ struct SignatureApp: App {
         let machine = withUnsafeBytes(of: sys.machine) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
         LogCapture.shared.log("Signature \(v) on \(machine), iOS \(UIDevice.current.systemVersion), RAM \(ProcessInfo.processInfo.physicalMemory / 1_073_741_824) GB, app budget \(String(format: "%.2f", Device.budgetGB)) GB")
         try? AVAudioSession.sharedInstance().setCategory(.playback)
-        let bar = UITabBarAppearance()
-        bar.configureWithOpaqueBackground()
-        bar.backgroundColor = UIColor(Theme.bg)
-        UITabBar.appearance().standardAppearance = bar
-        UITabBar.appearance().scrollEdgeAppearance = bar
-        let nav = UINavigationBarAppearance()
-        nav.configureWithOpaqueBackground()
-        nav.backgroundColor = UIColor(Theme.bg)
-        nav.shadowColor = .clear
-        nav.titleTextAttributes = [.foregroundColor: UIColor.white]
-        nav.largeTitleTextAttributes = [.foregroundColor: UIColor.white]
-        UINavigationBar.appearance().standardAppearance = nav
-        UINavigationBar.appearance().scrollEdgeAppearance = nav
+        Theme.applyBarAppearance()
     }
 
     var body: some Scene {
         WindowGroup {
+            let _ = applyTheme(themeID)
             TabView(selection: $tab) {
                 CreateView().withMiniPlayer()
                     .tabItem { Label("Create", systemImage: "sparkles") }
@@ -65,8 +63,10 @@ struct SignatureApp: App {
                     .tabItem { Label("Settings", systemImage: "gearshape") }
                     .tag(3)
             }
-            .tint(.white)
-            .preferredColorScheme(.dark)
+            .tint(Theme.text)
+            .preferredColorScheme(Theme.palette.dark ? .dark : .light)
+            .id(themeID)   // rebuild every screen when the theme changes
+
             .environmentObject(models)
             .environmentObject(library)
             .environmentObject(adapters)
@@ -96,6 +96,7 @@ struct SignatureApp: App {
             }
             .onChange(of: phase) { p in
                 if p == .active {
+                    UIApplication.shared.isIdleTimerDisabled = true  // never auto-lock while open
                     hub.startPolling()
                     models.refresh()
                 } else if p == .background {
@@ -103,6 +104,14 @@ struct SignatureApp: App {
                 }
             }
         }
+    }
+}
+
+private func applyTheme(_ id: String) {
+    let p = Palette.named(id)
+    if Theme.palette != p {
+        Theme.palette = p
+        Theme.applyBarAppearance()
     }
 }
 
