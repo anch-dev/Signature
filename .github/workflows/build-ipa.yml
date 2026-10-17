@@ -102,11 +102,12 @@ jobs:
           path: ios/build/xcodebuild.log
           if-no-files-found: ignore
 
+      # Raw .ipa, not zipped (archive: false): downloads as Signature.ipa.
       - name: Upload IPA
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: Signature-ipa
           path: Signature.ipa
+          archive: false
 
       # Rolling "latest" release with the raw .ipa: one stable link to download
       # straight from Safari / SideStore (no artifact zip to unpack).
