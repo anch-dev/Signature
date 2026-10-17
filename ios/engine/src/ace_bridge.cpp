@@ -36,7 +36,7 @@
 #    include <windows.h>
 #    include <psapi.h>
 #endif
-#if defined(__APPLE__) && !TARGET_OS_IPHONE
+#if defined(__APPLE__)
 #    include <sys/sysctl.h>
 #endif
 

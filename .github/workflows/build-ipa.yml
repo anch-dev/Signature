@@ -36,7 +36,16 @@ jobs:
 
       - name: Build engine
         if: steps.engine-cache.outputs.cache-hit != 'true'
-        run: bash scripts/build-engine.sh
+        run: |
+          set -o pipefail
+          mkdir -p build
+          if ! bash scripts/build-engine.sh > build/engine.log 2>&1; then
+            grep -E "error:|Error |fatal error" build/engine.log | sort -u | head -40 \
+              | while IFS= read -r line; do echo "::error::${line:0:400}"; done || true
+            tail -20 build/engine.log | while IFS= read -r line; do echo "::error::tail: ${line:0:400}"; done
+            exit 1
+          fi
+          tail -5 build/engine.log
 
       - name: Generate Xcode project
         run: xcodegen generate
