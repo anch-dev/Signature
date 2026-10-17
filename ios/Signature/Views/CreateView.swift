@@ -475,25 +475,26 @@ struct CreateView: View {
 
     private var optionsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
+            if gen.mode != .cover {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Length").font(.caption).foregroundStyle(Theme.muted)
+                    LengthPicker(duration: $gen.duration, limit: limit)
+                    if !onPC && models.liteActive {
+                        Text("Lite mode: up to \(Self.time(limit)) on this device.").font(.caption2).foregroundStyle(Theme.faint)
+                    }
+                }
+            }
             Button {
                 withAnimation(.snappy) { showOptions.toggle() }
             } label: {
                 HStack {
                     Text("More options").font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                     Spacer()
-                    Text(Self.time(min(gen.duration, limit))).font(.subheadline.monospacedDigit()).foregroundStyle(Theme.muted)
                     Image(systemName: "chevron.down").rotationEffect(.degrees(showOptions ? 180 : 0)).foregroundStyle(Theme.muted)
                 }
             }
             .buttonStyle(.plain)
             if showOptions {
-                if gen.mode != .cover { VStack(alignment: .leading, spacing: 4) {
-                    Text("Length").font(.caption).foregroundStyle(Theme.muted)
-                    Slider(value: $gen.duration, in: 10...max(limit, 20), step: 5).tint(Theme.accent)
-                    if !onPC && models.liteActive {
-                        Text("Lite mode: up to \(Self.time(limit)) on this device.").font(.caption2).foregroundStyle(Theme.faint)
-                    }
-                } }
                 Picker("Vocal language", selection: $gen.language) {
                     ForEach(languages, id: \.0) { Text($0.1).tag($0.0) }
                 }
@@ -549,5 +550,66 @@ struct LibraryPicker: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Cancel") { dismiss() } }
         }
+    }
+}
+
+
+/// Song length: 30-second presets up to the device limit, or an exact
+/// minutes:seconds choice (5-second steps) under Custom.
+struct LengthPicker: View {
+    @Binding var duration: Double
+    let limit: Double
+    @State private var custom = false
+
+    private var presets: [Double] { stride(from: 30.0, through: max(30, limit), by: 30).map { $0 } }
+    private var isPreset: Bool { presets.contains(duration) }
+    private var maxMinutes: Int { Int(limit) / 60 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(presets, id: \.self) { d in
+                        Chip(title: CreateView.time(d), selected: !custom && duration == d) {
+                            custom = false
+                            duration = d
+                        }
+                    }
+                    Chip(title: custom || !isPreset ? "Custom · \(CreateView.time(duration))" : "Custom",
+                         icon: "slider.horizontal.3", selected: custom || !isPreset) {
+                        withAnimation(.snappy) { custom.toggle() }
+                    }
+                }
+            }
+            if custom {
+                HStack(spacing: 0) {
+                    Picker("Minutes", selection: minutes) {
+                        ForEach(0...maxMinutes, id: \.self) { Text("\($0) min").tag($0) }
+                    }
+                    .pickerStyle(.wheel)
+                    Picker("Seconds", selection: seconds) {
+                        ForEach(Array(stride(from: 0, through: 55, by: 5)), id: \.self) { Text(String(format: "%02d s", $0)).tag($0) }
+                    }
+                    .pickerStyle(.wheel)
+                }
+                .frame(height: 120)
+                Text("10 seconds to \(CreateView.time(limit))").font(.caption2).foregroundStyle(Theme.faint)
+            }
+        }
+        .onAppear { if !isPreset { custom = true } }
+    }
+
+    private var minutes: Binding<Int> {
+        Binding(get: { Int(duration) / 60 },
+                set: { set(minutes: $0, seconds: Int(duration) % 60) })
+    }
+
+    private var seconds: Binding<Int> {
+        Binding(get: { (Int(duration) % 60) / 5 * 5 },
+                set: { set(minutes: Int(duration) / 60, seconds: $0) })
+    }
+
+    private func set(minutes m: Int, seconds s: Int) {
+        duration = min(limit, max(10, Double(m * 60 + s)))
     }
 }
