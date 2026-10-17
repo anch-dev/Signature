@@ -14,7 +14,7 @@ struct TerminalView: View {
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .phone: return "iPhone"
+            case .phone: return "Device"
             case .pcEngine: return "PC engine"
             case .pcTraining: return "PC training"
             }

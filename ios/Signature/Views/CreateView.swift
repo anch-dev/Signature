@@ -133,7 +133,7 @@ struct CreateView: View {
             HStack {
                 Image(systemName: "arrow.down.circle.fill").font(.title2).foregroundStyle(Theme.accent)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(models.isDownloadingRequired ? "Downloading \(models.music.name)" : "Get \(models.music.name) on this iPhone")
+                    Text(models.isDownloadingRequired ? "Downloading \(models.music.name)" : "Get \(models.music.name) on this device")
                         .font(.headline).foregroundStyle(Theme.text)
                     Text(models.isDownloadingRequired
                          ? "Keeps going if you leave the app."
@@ -161,7 +161,7 @@ struct CreateView: View {
     @ViewBuilder private var pcStatus: some View {
         if let s = hub.status, hub.reachable {
             if s.training?.isRunning == true {
-                Label("\(hub.pairing?.name ?? "PC") is training \(s.training!.dataset). Create on the iPhone meanwhile.", systemImage: "hourglass")
+                Label("\(hub.pairing?.name ?? "PC") is training \(s.training!.dataset). Create on this device meanwhile.", systemImage: "hourglass")
                     .font(.callout).foregroundStyle(Theme.warn)
             }
         } else {
@@ -491,7 +491,7 @@ struct CreateView: View {
                     Text("Length").font(.caption).foregroundStyle(Theme.muted)
                     Slider(value: $gen.duration, in: 10...max(limit, 20), step: 5).tint(Theme.accent)
                     if !onPC && models.liteActive {
-                        Text("Lite mode: up to \(Self.time(limit)) on this iPhone.").font(.caption2).foregroundStyle(Theme.faint)
+                        Text("Lite mode: up to \(Self.time(limit)) on this device.").font(.caption2).foregroundStyle(Theme.faint)
                     }
                 } }
                 Picker("Vocal language", selection: $gen.language) {

@@ -15,7 +15,7 @@ struct ModelPickerSheet: View {
                         VStack(alignment: .leading, spacing: 8) {
                             SectionLabel("Make songs on")
                             PillPicker(options: GenTarget.allCases, selection: $gen.target) {
-                                $0 == .phone ? "This iPhone" : (hub.pairing?.name ?? "PC")
+                                $0 == .phone ? "This device" : (hub.pairing?.name ?? "PC")
                             }
                         }
                     }
@@ -208,7 +208,7 @@ struct ModelsView: View {
                     }
                 }
                 if hiddenCount > 0 {
-                    Text("\(hiddenCount) sizes are hidden because they need more memory than iOS gives Signature on this iPhone (about \(String(format: "%.1f", Device.budgetGB)) GB). They can run on your PC.")
+                    Text("\(hiddenCount) sizes are hidden because they need more memory than iOS gives Signature on this device (about \(String(format: "%.1f", Device.budgetGB)) GB). They can run on your PC.")
                         .font(.caption).foregroundStyle(Theme.faint)
                 }
                 VStack(alignment: .leading, spacing: 10) {
@@ -225,13 +225,13 @@ struct ModelsView: View {
                             Text("PC").font(.caption2.weight(.bold)).padding(.horizontal, 7).padding(.vertical, 3)
                                 .background(Capsule().fill(Theme.cardHi)).foregroundStyle(Theme.muted)
                         }
-                        Text("Lyrics-to-song with melody and chord planning. Runs on a paired PC for now; its smallest build needs about 7.7 GB, more than any iPhone gives one app. On-device support is being worked on.")
+                        Text("Lyrics-to-song with melody and chord planning. Runs on a paired PC for now; its smallest build needs about 7.7 GB, more than a phone gives one app. On-device support is being worked on.")
                             .font(.caption).foregroundStyle(Theme.muted)
                     }
                     .card()
                 }
                 NavigationLink { FilesOnDiskView() } label: {
-                    Label("Files on this iPhone", systemImage: "folder").font(.subheadline)
+                    Label("Files on this device", systemImage: "folder").font(.subheadline)
                 }
                 .tint(Theme.accent)
                 Text("Models come from Hugging Face (Serveurperso/ACE-Step-1.5-GGUF). Downloads continue in the background. Long-press a size to delete it.")
@@ -284,7 +284,7 @@ struct ModelsView: View {
 
     private var summary: some View {
         HStack(spacing: 12) {
-            stat("On this iPhone", ModelManager.format(models.usedBytes))
+            stat("On this device", ModelManager.format(models.usedBytes))
             stat("Memory for models", String(format: "%.1f GB", Device.budgetGB))
             stat("Mode", models.liteActive ? "Lite" : "Full")
         }
@@ -427,7 +427,7 @@ struct SettingsView: View {
                         ReadinessCard().listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
                     }
                 } footer: {
-                    Text("Every ACE-Step 1.5 model, in every size, with how well it fits this iPhone.")
+                    Text("Every ACE-Step 1.5 model, in every size, with how well it fits this device.")
                 }
                 .themedRow()
 
@@ -446,7 +446,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Performance")
                 } footer: {
-                    Text("Lite uses less memory (shorter songs, smaller working buffers) and turns on automatically when iOS gives Signature under 3 GB, as on 4 GB iPhones. GPU is fastest; CPU uses the same memory but is slower. Mapping reads model weights straight from storage instead of copying them (CPU only; on the GPU weights are always copied).\n\nLow memory streams the music model from storage one layer at a time, like ComfyUI's low-VRAM offload: models bigger than this iPhone's memory can still run, several times slower. “When needed” only does it for models that don't fit.")
+                    Text("Lite uses less memory (shorter songs, smaller working buffers) and turns on automatically when iOS gives Signature under 3 GB, as on 4 GB phones. GPU is fastest; CPU uses the same memory but is slower. Mapping reads model weights straight from storage instead of copying them (CPU only; on the GPU weights are always copied).\n\nLow memory streams the music model from storage one layer at a time, like ComfyUI's low-VRAM offload: models bigger than this device's memory can still run, several times slower. “When needed” only does it for models that don't fit.")
                 }
                 .themedRow()
 
@@ -493,7 +493,7 @@ struct SettingsView: View {
                         }
                     Button("Import style file") { importing = true }
                 } header: {
-                    Text("Your styles on this iPhone")
+                    Text("Your styles on this device")
                 } footer: {
                     Text("Styles you train on a PC, downloaded from the PC tab or imported as .safetensors.")
                 }
@@ -540,7 +540,7 @@ struct ReadinessCard: View {
             HStack {
                 Image(systemName: models.isReady ? "checkmark.seal.fill" : "exclamationmark.circle.fill")
                     .foregroundStyle(models.isReady ? Theme.good : Theme.warn)
-                Text(models.isReady ? "Ready to create on this iPhone" : "Missing files for \(models.music.name)")
+                Text(models.isReady ? "Ready to create on this device" : "Missing files for \(models.music.name)")
                     .font(.headline).foregroundStyle(Theme.text)
                 Spacer()
             }
@@ -606,7 +606,7 @@ struct FilesOnDiskView: View {
             .themedRow()
         }
         .screen()
-        .navigationTitle("Files on this iPhone")
+        .navigationTitle("Files on this device")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             models.refresh()
@@ -627,7 +627,7 @@ struct RecommendedCard: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Image(systemName: "sparkles").foregroundStyle(Theme.accent)
-                Text("Recommended for this \(UIDevice.current.model)").font(.headline).foregroundStyle(Theme.text)
+                Text("Recommended for this device").font(.headline).foregroundStyle(Theme.text)
                 Spacer()
                 if models.isRecommendedSelected {
                     Text("In use").font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)

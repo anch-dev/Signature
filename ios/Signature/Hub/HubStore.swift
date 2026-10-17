@@ -103,7 +103,7 @@ final class HubStore: ObservableObject {
             reachable = true
         } catch HubError.server(let m) where m.contains("token") || m.contains("Pair") {
             reachable = false
-            lastError = "The PC rejected this phone. Scan the pairing code again."
+            lastError = "The PC rejected this device. Scan the pairing code again."
         } catch {
             reachable = false
         }

@@ -33,7 +33,7 @@ struct PCView: View {
             Section {
                 VStack(alignment: .leading, spacing: 10) {
                     Label("Use your PC for training and faster songs", systemImage: "desktopcomputer").font(.headline)
-                    Text("1. On your PC, run **start.bat** from the Signature `pc` folder.\n2. The Hub opens in your browser with a QR code.\n3. Scan it with the iPhone **Camera** app.")
+                    Text("1. On your PC, run **start.bat** from the Signature `pc` folder.\n2. The Hub opens in your browser with a QR code.\n3. Scan it with your device's **Camera** app.")
                         .font(.callout)
                     Text("Works on the same Wi-Fi, or anywhere with Tailscale on both devices.")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -182,7 +182,7 @@ struct PCView: View {
                     if hub.downloadingStyle == s.name {
                         ProgressView()
                     } else if adapters.adapters.contains(where: { AdapterStore.name($0) == s.name }) {
-                        Label("On iPhone", systemImage: "checkmark.circle.fill").labelStyle(.iconOnly).foregroundStyle(.green)
+                        Label("On this device", systemImage: "checkmark.circle.fill").labelStyle(.iconOnly).foregroundStyle(.green)
                         Button("Update") { Task { await download(s) } }.buttonStyle(.borderless).font(.caption)
                     } else {
                         Button { Task { await download(s) } } label: {
@@ -198,7 +198,7 @@ struct PCView: View {
 
     private func download(_ s: RemoteStyle) async {
         if let url = await hub.downloadStyle(s, into: adapters) {
-            adapters.importMessage = "\"\(s.name)\" is on your iPhone now. It works offline."
+            adapters.importMessage = "\"\(s.name)\" is on this device now. It works offline."
             if gen.adapter == nil { gen.adapter = url }
         }
     }

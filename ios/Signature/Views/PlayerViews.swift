@@ -224,7 +224,7 @@ struct NowPlayingView: View {
     private func details(_ s: Song) -> some View {
         let items: [(String, String)] = [
             ("Model", s.model ?? "ACE-Step 1.5"),
-            ("Made on", s.madeOn ?? "iPhone"),
+            ("Made on", s.madeOn.map { $0 == "iPhone" ? "This device" : $0 } ?? "This device"),
             ("Style", s.adapter ?? "Base"),
             ("BPM", s.bpm > 0 ? "\(s.bpm)" : "—"),
             ("Key", s.key.isEmpty ? "—" : s.key),

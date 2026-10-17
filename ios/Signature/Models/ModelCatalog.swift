@@ -65,8 +65,8 @@ enum Catalog {
         .init(id: "acestep-v15-base", name: "v1.5 Base", blurb: "Raw base model, 50 steps. For experiments.", steps: 50, xl: false, sizes: std),
         .init(id: "acestep-v15-sftturbo50", name: "v1.5 SFT-Turbo", blurb: "Merge of SFT and Turbo.", steps: 0, xl: false,
               sizes: [.q8: 2_549_527_936, .bf16: 4_791_642_016]),
-        .init(id: "acestep-v15-xl-turbo", name: "XL Turbo", blurb: "Bigger and richer. Needs a Pro iPhone.", steps: 8, xl: true, sizes: xlTurbo),
-        .init(id: "acestep-v15-xl-sft", name: "XL SFT", blurb: "Best quality, 50 steps. Pro iPhones only.", steps: 50, xl: true, sizes: xlStd),
+        .init(id: "acestep-v15-xl-turbo", name: "XL Turbo", blurb: "Bigger and richer. Needs a high-memory device.", steps: 8, xl: true, sizes: xlTurbo),
+        .init(id: "acestep-v15-xl-sft", name: "XL SFT", blurb: "Best quality, 50 steps. High-memory devices only.", steps: 50, xl: true, sizes: xlStd),
         .init(id: "acestep-v15-xl-base", name: "XL Base", blurb: "XL base model, 50 steps.", steps: 50, xl: true, sizes: xlStd),
         .init(id: "acestep-v15-xl-sftturbo50", name: "XL SFT-Turbo", blurb: "XL merge of SFT and Turbo.", steps: 0, xl: true, sizes: xlST),
     ]
@@ -76,7 +76,7 @@ enum Catalog {
               sizes: [.q8: 709_846_656, .bf16: 1_331_108_128]),
         .init(id: "acestep-5Hz-lm-1.7B", name: "Songwriter 1.7B", blurb: "Better lyrics and structure.",
               sizes: [.q8: 1_975_837_568, .bf16: 3_713_827_104]),
-        .init(id: "acestep-5Hz-lm-4B", name: "Songwriter 4B", blurb: "Best writing. 12 GB iPhones.",
+        .init(id: "acestep-5Hz-lm-4B", name: "Songwriter 4B", blurb: "Best writing. 12 GB devices.",
               sizes: [.q5: 3_025_965_984, .q6: 3_442_713_504, .q8: 4_457_323_648, .bf16: 8_384_454_592]),
     ]
 
@@ -180,7 +180,7 @@ enum Device {
         }
         if gb >= 3.2 {
             return .init(music: turbo, musicQuant: .q6, songwriter: small, songwriterQuant: .q8, lite: false,
-                         why: "Turbo at high quality with the small songwriter leaves headroom on this phone.")
+                         why: "Turbo at high quality with the small songwriter leaves headroom on this device.")
         }
         return .init(music: turbo, musicQuant: .q4, songwriter: small, songwriterQuant: .q8, lite: true,
                      why: "Compact Turbo, the small songwriter and Lite mode keep everything under ~\(String(format: "%.1f", gb)) GB.")
