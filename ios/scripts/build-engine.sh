@@ -5,8 +5,6 @@
 # Runs on macOS (the GitHub Actions runner). Needs Xcode and CMake.
 set -euo pipefail
 
-ACESTEP_REPO="https://github.com/ServeurpersoCom/acestep.cpp.git"
-ACESTEP_COMMIT="de858d8e1a94f0e1939cf9bdd8ff7d9631953077"   # tested with this bridge
 IOS_MIN="16.0"
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"          # ios/
@@ -14,26 +12,7 @@ VENDOR="$HERE/vendor/acestep.cpp"
 BUILD="$HERE/build/engine-ios"
 OUT="$HERE/Frameworks/AceEngine.xcframework"
 
-if [ ! -f "$VENDOR/src/pipeline-synth.h" ]; then
-    echo "==> Fetching acestep.cpp @ ${ACESTEP_COMMIT:0:7}"
-    rm -rf "$VENDOR"
-    mkdir -p "$VENDOR"
-    git -C "$VENDOR" init -q
-    git -C "$VENDOR" remote add origin "$ACESTEP_REPO"
-    git -C "$VENDOR" fetch -q --depth 1 origin "$ACESTEP_COMMIT"
-    git -C "$VENDOR" checkout -q FETCH_HEAD
-    git -C "$VENDOR" submodule update -q --init --depth 1 ggml
-fi
-
-echo "==> Applying Signature engine patches"
-for p in "$HERE"/engine/patches/*.patch; do
-    if git -C "$VENDOR" apply --reverse --check "$p" 2>/dev/null; then
-        echo "    already applied: $(basename "$p")"
-    else
-        git -C "$VENDOR" apply "$p"
-        echo "    applied: $(basename "$p")"
-    fi
-done
+bash "$HERE/scripts/fetch-acestep.sh"
 
 echo "==> Configuring for iOS arm64 (Metal, Accelerate)"
 cmake -S "$HERE/engine" -B "$BUILD" -G Xcode \

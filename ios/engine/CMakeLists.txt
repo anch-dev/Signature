@@ -39,7 +39,7 @@ target_include_directories(acestep_bridge PRIVATE ${ACESTEP_DIR}/src ${ACESTEP_D
 target_include_directories(acestep_bridge SYSTEM PRIVATE ${ACESTEP_DIR}/ggml/include)
 target_compile_options(acestep_bridge PRIVATE -w)
 target_link_libraries(acestep_bridge PUBLIC yyjson ggml)
-foreach(backend base cpu blas metal)
+foreach(backend base cpu blas metal vulkan)
     if(TARGET ggml-${backend})
         target_link_libraries(acestep_bridge PUBLIC ggml-${backend})
     endif()

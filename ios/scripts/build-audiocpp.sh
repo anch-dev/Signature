@@ -12,11 +12,23 @@ SRC="$HERE/vendor/audio.cpp"
 BUILD="$HERE/build/audiocpp-ios"
 OUT="$HERE/Frameworks/AudioCpp.framework"
 
+mkdir -p "$HERE/build"
 if [ ! -d "$SRC/.git" ]; then
     git clone --depth 1 --branch "$VER" https://github.com/0xShug0/audio.cpp "$SRC"
 fi
 
+# sentencepiece calls set_xcode_property (a macro from its own iOS toolchain
+# file) when CMAKE_SYSTEM_NAME is iOS; we build with CMake's native iOS
+# support, so provide a no-op instead.
+cat > "$HERE/build/audiocpp-noop-xcode.cmake" <<'CM'
+if(NOT COMMAND set_xcode_property)
+  macro(set_xcode_property TARGET XCODE_PROPERTY XCODE_VALUE XCODE_RELVERSION)
+  endmacro()
+endif()
+CM
+
 cmake -S "$SRC" -B "$BUILD" \
+    -DCMAKE_PROJECT_INCLUDE_BEFORE="$HERE/build/audiocpp-noop-xcode.cmake" \
     -DCMAKE_SYSTEM_NAME=iOS \
     -DCMAKE_OSX_SYSROOT=iphoneos \
     -DCMAKE_OSX_ARCHITECTURES=arm64 \

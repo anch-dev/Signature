@@ -73,7 +73,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ios/Frameworks/AceEngine.xcframework
-          key: engine-${{ hashFiles('ios/engine/**', 'ios/scripts/build-engine.sh') }}
+          key: engine-${{ hashFiles('ios/engine/**', 'ios/scripts/build-engine.sh', 'ios/scripts/fetch-acestep.sh') }}
 
       - name: Build engine
         if: steps.engine-cache.outputs.cache-hit != 'true'
