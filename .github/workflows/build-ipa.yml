@@ -2,7 +2,7 @@ name: Build IPA
 
 on:
   push:
-    branches: [main]
+    branches: [main, yue2-ios]
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -197,6 +197,21 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "Latest build ($(date -u +%Y-%m-%d) · ${GITHUB_SHA::7})" \
             --notes-file notes.md
+
+      # Test builds from the yue2-ios branch go to their own pre-release so the
+      # "latest" link only ever carries main.
+      - name: Publish test build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/yue2-ios'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: .
+        run: |
+          gh release delete yue2-test --yes --cleanup-tag 2>/dev/null || true
+          gh release create yue2-test Signature.ipa \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "YuE2 test build ($(date -u +%Y-%m-%d) · ${GITHUB_SHA::7})" \
+            --notes "Test build from the yue2-ios branch (on-device YuE2 work in progress)."
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
