@@ -156,8 +156,6 @@ final class Yue2Engine {
         defer { a.optionsFree(opts) }
         _ = a.optionsSet(opts, "yue2.model_gguf", mainGGUF)
         _ = a.optionsSet(opts, "yue2.vae_gguf", vaeGGUF)
-        // Small host graph arenas (the 6 GB default is sized for desktops).
-        _ = a.optionsSet(opts, "yue2.nar_graph_arena_mb", "1024")
 
         // audiocpp_backend_config { backend, device, threads }
         let backendName = strdup("metal")

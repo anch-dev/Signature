@@ -103,9 +103,6 @@ class Yue2Runner:
             "--backend", "cuda", "--threads", str(max(2, (os.cpu_count() or 8) // 2)),
             "--session-option", f"yue2.model_gguf={st['model']}",
             "--session-option", f"yue2.vae_gguf={VAE_GGUF}",
-            # Smaller host graph arenas than the 6 GB default (see audio.cpp
-            # docs/reports/YuE2/longform_host_memory.md).
-            "--session-option", "yue2.nar_graph_arena_mb=2048",
             "--lyrics", lyrics or "[instrumental]",
             "--request-option", f"style={style}",
             "--request-option", f"cot={cot}",
