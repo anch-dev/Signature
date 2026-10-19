@@ -1,4 +1,5 @@
 import Foundation
+import os
 import UIKit
 
 enum GenTarget: String, CaseIterable, Identifiable {
@@ -459,16 +460,32 @@ final class Generator: ObservableObject {
         begin("YuE2 is writing the song")
         markInFlight("YuE2, \(p.title)")
         LogCapture.shared.log("Start: YuE2 (on device), planning \(yuePlanning.rawValue)")
-        // No fine progress from audio.cpp: estimate ~4x real time for a short song.
-        let words = max(20, p.lyrics.split(separator: " ").count)
-        let expected = Double(words) * 2.5 + 60
+        // No fine progress from audio.cpp. Guess the song length from the lyrics
+        // (~4 s per line + intro/outro), then use this device's measured speed
+        // from earlier YuE2 songs; first run assumes ~2.5x real time + planning.
+        let lines = max(4, p.lyrics.split(whereSeparator: \.isNewline).filter { !$0.hasPrefix("[") && !$0.isEmpty }.count)
+        let songGuess = Double(lines) * 4 + 20
+        let rateKey = "yue2.device.\(yuePlanning.rawValue)"
+        etaKey = rateKey
+        let planning: Double = yuePlanning == .full ? 90 : yuePlanning == .melody ? 60 : 0
+        let expected = historyRate(rateKey).map { $0 * songGuess } ?? (songGuess * 2.5 + planning + 40)
         let started = Date()
+        LogCapture.shared.log(String(format: "YuE2: expecting ~%.0f s of audio, ~%d min", songGuess, Int(expected / 60) + 1))
         let tick = Task { @MainActor [weak self] in
+            var lastBeat = Date()
             while let self, self.running {
                 let t = Date().timeIntervalSince(started)
                 self.progress = min(0.95, t / expected)
                 self.eta = max(5, expected - t)
-                self.statusText = t < expected * 0.5 ? "YuE2 is writing the song" : "YuE2 is rendering audio"
+                if t > expected * 1.1 { self.eta = nil }
+                self.statusText = t < expected * 0.6 ? "YuE2 is writing the song" : "YuE2 is rendering audio"
+                if Date().timeIntervalSince(lastBeat) >= 15 {
+                    lastBeat = Date()
+                    LogCapture.shared.log(String(format: "YuE2: running %d:%02d, memory %.2f GB, %.2f GB left",
+                                                 Int(t) / 60, Int(t) % 60,
+                                                 Double(SongEngine.footprint) / 1_073_741_824,
+                                                 Double(os_proc_available_memory()) / 1_073_741_824))
+                }
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
@@ -478,6 +495,9 @@ final class Generator: ObservableObject {
                 let seconds = try await Yue2Engine.shared.generate(
                     req, modelDir: models.yue2Dir, mainGGUF: Yue2Catalog.main.fileName,
                     vaeGGUF: Yue2Catalog.vae.fileName, output: out)
+                saveRate(rateKey, audioSeconds: seconds)
+                LogCapture.shared.log(String(format: "YuE2: done, %.0f s of audio in %.0f s",
+                                             seconds, Date().timeIntervalSince(started)))
                 let song = Song(
                     id: UUID(), title: p.title, caption: p.caption,
                     lyrics: p.lyrics.isEmpty ? "[Instrumental]" : p.lyrics, adapter: nil,

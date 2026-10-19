@@ -83,6 +83,9 @@ final class Yue2Engine {
 
     private func load() throws -> API {
         if let api { return api }
+        // Same as the ACE-Step engine: Metal residency sets keep freed buffers
+        // wired for minutes, which counts against the app's memory limit.
+        setenv("GGML_METAL_NO_RESIDENCY", "1", 1)
         guard let path = frameworkPath, let h = dlopen(path, RTLD_NOW | RTLD_LOCAL) else {
             if let e = dlerror() { LogCapture.shared.log("YuE2: dlopen failed: \(String(cString: e))") }
             throw Failure.notIncluded
@@ -111,6 +114,11 @@ final class Yue2Engine {
             resultAudio: try sym("audiocpp_result_audio", ResultAudio.self),
             resultFree: try sym("audiocpp_result_free", Free.self))
         guard a.abi() >> 16 == 0 else { throw Failure.incompatible }
+        // Optional Signature hook (build-audiocpp.sh): stage timings + load progress to stdout.
+        typealias SetLogging = @convention(c) (Int32) -> Void
+        if let p = dlsym(h, "audiocpp_signature_set_logging") {
+            unsafeBitCast(p, to: SetLogging.self)(1)
+        }
         api = a
         LogCapture.shared.log(String(format: "YuE2: audio.cpp ABI %d.%d loaded", (a.abi() >> 16) & 0xff, (a.abi() >> 8) & 0xff))
         return a

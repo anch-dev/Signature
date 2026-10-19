@@ -17,6 +17,23 @@ if [ ! -d "$SRC/.git" ]; then
     git clone --depth 1 --branch "$VER" https://github.com/0xShug0/audio.cpp "$SRC"
 fi
 
+# Signature hook: let the app turn on audio.cpp's stage/timing log and model
+# load progress (the CLI's --log), so the in-app terminal shows what YuE2 is
+# doing. Appended once to the C API translation unit.
+CAPI="$SRC/src/capi/audiocpp.cpp"
+if ! grep -q audiocpp_signature_set_logging "$CAPI"; then
+    cat >> "$CAPI" <<'CPP'
+
+// ---- Signature (iOS app) hook ----------------------------------------------
+#include "engine/framework/core/load_progress.h"
+#include "engine/framework/debug/trace.h"
+extern "C" __attribute__((visibility("default"))) void audiocpp_signature_set_logging(int enabled) {
+    engine::debug::configure_logging(engine::debug::LoggingConfig{enabled != 0, std::nullopt});
+    engine::core::set_load_progress_enabled(enabled != 0);
+}
+CPP
+fi
+
 # Deployment target 16.4: audio.cpp uses std::to_chars for floats (iOS 16.3+).
 # The app itself supports 16.0; on older iOS the framework just doesn't load
 # and on-device YuE2 is unavailable.
