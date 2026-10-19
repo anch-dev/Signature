@@ -455,8 +455,7 @@ final class Generator: ObservableObject {
                                          Double(Yue2Catalog.estimatedPeak) / 1_073_741_824, Device.budgetGB))
         }
         let (out, fileName) = library.newFileURL(title: p.title, ext: "wav")
-        let req = Yue2Engine.Request(style: p.caption, lyrics: p.lyrics, cot: yuePlanning.rawValue,
-                                     seed: lockSeed ? Int64(seedText) ?? -1 : -1, sound: sound)
+
         begin("YuE2 is writing the song")
         markInFlight("YuE2, \(p.title)")
         LogCapture.shared.log("Start: YuE2 (on device), planning \(yuePlanning.rawValue)")
@@ -469,6 +468,19 @@ final class Generator: ObservableObject {
         etaKey = rateKey
         let planning: Double = yuePlanning == .full ? 90 : yuePlanning == .melody ? 60 : 0
         let expected = historyRate(rateKey).map { $0 * songGuess } ?? (songGuess * 2.5 + planning + 40)
+        // Size YuE2's KV cache to this device. ~25 music tokens per second of audio;
+        // allow 1.6x the lyric-based guess (min 60 s, max 4 min). The planning score
+        // (melody/full) adds ~2,500 prefix tokens. Guidance (CFG) doubles the cache,
+        // so it only runs when there's room for both sequences.
+        let maxTokens = Int(min(240, max(60, songGuess * 1.6)) * 25)
+        let prefix = yuePlanning == .off ? 600 : 3000
+        let weights: Int64 = 1_700_000_000          // AR + generation buffers, measured on iPhone 16 Pro
+        let room = Device.budget - weights - 900_000_000
+        let cfgNeed = Int64((prefix + maxTokens) * 2) * Yue2Engine.kvBytesPerToken
+        let allowCFG = cfgNeed < room
+        let req = Yue2Engine.Request(style: p.caption, lyrics: p.lyrics, cot: yuePlanning.rawValue,
+                                     seed: lockSeed ? Int64(seedText) ?? -1 : -1, sound: sound,
+                                     maxSemanticTokens: maxTokens, allowCFG: allowCFG)
         let started = Date()
         LogCapture.shared.log(String(format: "YuE2: expecting ~%.0f s of audio, ~%d min", songGuess, Int(expected / 60) + 1))
         let tick = Task { @MainActor [weak self] in

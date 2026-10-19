@@ -44,8 +44,8 @@ enum Yue2Catalog {
     ]
     static var files: [ModelFile] { [main, vae] + sidecars }
     static var bytes: Int64 { files.reduce(0) { $0 + $1.bytes } }
-    /// Rough peak for a ~1 minute song: weights + AR KV cache + NAR/VAE graphs.
-    static let estimatedPeak: Int64 = 4_300_000_000
+    /// Peak with guidance off (measured 3.4 GB on iPhone 16 Pro during planning) plus KV cache headroom.
+    static let estimatedPeak: Int64 = 3_800_000_000
 }
 
 /// A DiT ("music model") in all the quantizations that exist for it.

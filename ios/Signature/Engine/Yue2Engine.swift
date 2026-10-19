@@ -15,7 +15,14 @@ final class Yue2Engine {
         var cot: String          // off | melody | full
         var seed: Int64
         var sound: SoundSettings
+        /// Cap on music tokens (YuE2 writes ~25 per second of audio). Sizes the KV cache.
+        var maxSemanticTokens: Int = 9000
+        /// Classifier-free guidance runs two sequences and doubles the KV cache.
+        var allowCFG: Bool = true
     }
+
+    /// YuE2-3B KV cache per token: 28 layers x (K+V) x 8 heads x 128 dims x f16.
+    static let kvBytesPerToken: Int64 = 28 * 2 * 8 * 128 * 2
 
     enum Failure: LocalizedError {
         case notIncluded, incompatible, failed(String)
@@ -187,7 +194,9 @@ final class Yue2Engine {
         _ = a.requestSetOption(req, "cot", r.cot)
         let seed = r.seed >= 0 ? r.seed : Int64.random(in: 0..<Int64(Int32.max))
         _ = a.requestSetOption(req, "seed", String(seed))
-        for (k, v) in Self.options(for: r.sound) { _ = a.requestSetOption(req, k, v) }
+        for (k, v) in Self.options(for: r.sound, allowCFG: r.allowCFG) { _ = a.requestSetOption(req, k, v) }
+        _ = a.requestSetOption(req, "semantic_max_tokens", String(r.maxSemanticTokens))
+        LogCapture.shared.log("YuE2: max \(r.maxSemanticTokens) music tokens (~\(r.maxSemanticTokens / 25) s), guidance \(r.allowCFG ? "on" : "off (memory)")")
 
         LogCapture.shared.log("YuE2: generating (cot \(r.cot), seed \(seed))")
         var result: OpaquePointer?
@@ -206,13 +215,16 @@ final class Yue2Engine {
     }
 
     /// Same slider mapping as the PC Hub (pc/hub/signature_hub/yue2.py).
-    static func options(for s: SoundSettings) -> [(String, String)] {
+    static func options(for s: SoundSettings, allowCFG: Bool = true) -> [(String, String)] {
         var o: [(String, String)] = []
         if abs(s.weirdness - 0.5) > 0.001 {
             o.append(("semantic_temperature", String(format: "%.3f", 0.7 + 0.6 * s.weirdness)))
             o.append(("semantic_top_p", String(format: "%.3f", min(0.99, 0.9 + 0.1 * s.weirdness))))
         }
-        if abs(s.styleInfluence - 0.5) > 0.001 {
+        if !allowCFG {
+            // 1.0 exactly = single sequence (cot=off would otherwise default to 1.01 and run CFG).
+            o.append(("guidance_scale", "1.0"))
+        } else if abs(s.styleInfluence - 0.5) > 0.001 {
             o.append(("guidance_scale", String(format: "%.3f", max(1.0, 1.01 + (s.styleInfluence - 0.5) * 3.0))))
         }
         o.append(("num_inference_steps", s.quality == .fast ? "6" : s.quality == .high ? "16" : "8"))
