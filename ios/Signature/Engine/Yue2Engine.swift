@@ -19,6 +19,9 @@ final class Yue2Engine {
         var maxSemanticTokens: Int = 9000
         /// Classifier-free guidance runs two sequences and doubles the KV cache.
         var allowCFG: Bool = true
+        /// Latent frames per VAE decode tile (~25 per second). The package default
+        /// (1024 = ~40 s per tile) needs several GB of activations at once.
+        var vaeTileFrames: Int = 256
     }
 
     /// YuE2-3B KV cache per token: 28 layers x (K+V) x 8 heads x 128 dims x f16.
@@ -143,12 +146,45 @@ final class Yue2Engine {
         return try await withCheckedThrowingContinuation { cont in
             queue.async {
                 do {
-                    cont.resume(returning: try self.run(a, r, modelDir: modelDir, mainGGUF: mainGGUF, vaeGGUF: vaeGGUF, output: output))
+                    let root = try Self.runRoot(for: modelDir, vaeTileFrames: r.vaeTileFrames)
+                    cont.resume(returning: try self.run(a, r, modelDir: root, mainGGUF: mainGGUF, vaeGGUF: vaeGGUF, output: output))
                 } catch {
                     cont.resume(throwing: error)
                 }
             }
         }
+    }
+
+    /// A sibling model root for this run: hard links to the downloaded GGUFs plus
+    /// copies of the sidecars with the VAE tile size set for this device. The
+    /// downloaded package stays untouched (its sizes are how downloads are verified).
+    static func runRoot(for modelDir: URL, vaeTileFrames: Int) throws -> URL {
+        let fm = FileManager.default
+        let root = modelDir.deletingLastPathComponent().appendingPathComponent("Yue2-3B-run", isDirectory: true)
+        let side = root.appendingPathComponent("sidecars", isDirectory: true)
+        try fm.createDirectory(at: side, withIntermediateDirectories: true)
+        for name in (try? fm.contentsOfDirectory(atPath: modelDir.path)) ?? [] where name.hasSuffix(".gguf") {
+            let src = modelDir.appendingPathComponent(name), dst = root.appendingPathComponent(name)
+            let same = (try? fm.attributesOfItem(atPath: dst.path)[.systemFileNumber] as? NSNumber)
+                == (try? fm.attributesOfItem(atPath: src.path)[.systemFileNumber] as? NSNumber)
+            if fm.fileExists(atPath: dst.path) && same { continue }
+            try? fm.removeItem(at: dst)
+            do { try fm.linkItem(at: src, to: dst) } catch { try fm.createSymbolicLink(at: dst, withDestinationURL: src) }
+        }
+        let srcSide = modelDir.appendingPathComponent("sidecars", isDirectory: true)
+        for name in (try? fm.contentsOfDirectory(atPath: srcSide.path)) ?? [] {
+            let src = srcSide.appendingPathComponent(name), dst = side.appendingPathComponent(name)
+            try? fm.removeItem(at: dst)
+            if name == "yue2-vae-config.json", let data = try? Data(contentsOf: src),
+               var json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                json["decode_core_frames"] = vaeTileFrames
+                let out = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
+                try out.write(to: dst)
+            } else {
+                try fm.copyItem(at: src, to: dst)
+            }
+        }
+        return root
     }
 
     private func run(_ a: API, _ r: Request, modelDir: URL, mainGGUF: String, vaeGGUF: String, output: URL) throws -> Double {
@@ -196,7 +232,7 @@ final class Yue2Engine {
         _ = a.requestSetOption(req, "seed", String(seed))
         for (k, v) in Self.options(for: r.sound, allowCFG: r.allowCFG) { _ = a.requestSetOption(req, k, v) }
         _ = a.requestSetOption(req, "semantic_max_tokens", String(r.maxSemanticTokens))
-        LogCapture.shared.log("YuE2: max \(r.maxSemanticTokens) music tokens (~\(r.maxSemanticTokens / 25) s), guidance \(r.allowCFG ? "on" : "off (memory)")")
+        LogCapture.shared.log("YuE2: max \(r.maxSemanticTokens) music tokens (~\(r.maxSemanticTokens / 25) s), guidance \(r.allowCFG ? "on" : "off (memory)"), VAE tiles \(r.vaeTileFrames) frames")
 
         LogCapture.shared.log("YuE2: generating (cot \(r.cot), seed \(seed))")
         var result: OpaquePointer?

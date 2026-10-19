@@ -271,6 +271,10 @@ final class ModelManager: ObservableObject {
     func delete(_ f: ModelFile) {
         cancel(f)
         try? FileManager.default.removeItem(at: path(f))
+        if f.id.hasPrefix(Yue2Catalog.folder + "/") {
+            // Hard links in the per-run root would keep the space in use.
+            try? FileManager.default.removeItem(at: directory.appendingPathComponent("Yue2-3B-run", isDirectory: true))
+        }
         refresh()
     }
 
@@ -285,7 +289,8 @@ final class ModelManager: ObservableObject {
     func filesOnDisk() -> [DiskFile] {
         let fm = FileManager.default
         let names = (fm.enumerator(atPath: directory.path)?.allObjects as? [String]) ?? []
-        return names.filter { $0.hasSuffix(".gguf") }.sorted().map { n in
+        // Yue2-3B-run holds hard links to the YuE2 files (see Yue2Engine.runRoot); skip it.
+        return names.filter { $0.hasSuffix(".gguf") && !$0.hasPrefix("Yue2-3B-run/") }.sorted().map { n in
             let size = (try? fm.attributesOfItem(atPath: directory.appendingPathComponent(n).path)[.size] as? NSNumber)?.int64Value ?? 0
             let expected = Catalog.allFiles.first { $0.id == n }?.bytes
             return DiskFile(name: n, bytes: size, complete: expected == size)
