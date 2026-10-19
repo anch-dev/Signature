@@ -17,6 +17,10 @@ if [ ! -d "$SRC/.git" ]; then
     git clone --depth 1 --branch "$VER" https://github.com/0xShug0/audio.cpp "$SRC"
 fi
 
+# Deployment target 16.4: audio.cpp uses std::to_chars for floats (iOS 16.3+).
+# The app itself supports 16.0; on older iOS the framework just doesn't load
+# and on-device YuE2 is unavailable.
+
 # sentencepiece calls set_xcode_property (a macro from its own iOS toolchain
 # file) when CMAKE_SYSTEM_NAME is iOS; we build with CMake's native iOS
 # support, so provide a no-op instead.
@@ -32,7 +36,7 @@ cmake -S "$SRC" -B "$BUILD" \
     -DCMAKE_SYSTEM_NAME=iOS \
     -DCMAKE_OSX_SYSROOT=iphoneos \
     -DCMAKE_OSX_ARCHITECTURES=arm64 \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
     -DCMAKE_BUILD_TYPE=Release \
     -DAUDIOCPP_BUILD_C_API=ON \
     -DAUDIOCPP_MODEL_SET=custom \
@@ -65,7 +69,7 @@ cat > "$OUT/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>FMWK</string>
   <key>CFBundleShortVersionString</key><string>${VER#v}</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>MinimumOSVersion</key><string>16.0</string>
+  <key>MinimumOSVersion</key><string>16.4</string>
   <key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>
 </dict></plist>
 PLIST
